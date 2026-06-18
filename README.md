@@ -25,7 +25,7 @@ curl -fsSL https://yeet.cx | sh
 make            # compile bin/httptop.bpf.o (needs clang + bpftool)
 yeet run .      # watch every up interface, including loopback
 ```
-[Manual install guide](https://yeet.cx/docs/manual-installation) | Linux only
+[Manual install guide](https://yeet.cx/docs/install/manual-installation) | Linux only
 
 With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerates the up interfaces, attaches at the TC layer, and starts ranking endpoints. Flags tune what it watches and how it groups:
 
