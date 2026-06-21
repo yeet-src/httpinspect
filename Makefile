@@ -4,7 +4,7 @@ ARCH    ?= $(shell uname -m | sed 's/x86_64/x86/; s/aarch64/arm64/')
 CLANG   ?= clang
 # `bpftool btf dump` reads /sys/kernel/btf/vmlinux. On some hardened kernels
 # that node is root-only — set BPFTOOL='sudo bpftool' if the dump fails for you.
-BPFTOOL ?= bpftool
+BPFTOOL ?= /usr/sbin/bpftool
 
 # BPF headers (bpf_helpers.h, bpf_endian.h) from libbpf.
 # Install via your distro's libbpf / libbpf-dev package.
