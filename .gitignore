@@ -1,10 +1,15 @@
 # build artifacts
-/bin/
-*.o
-*.o.tmp
+/node_modules/
+/src/index.jsx
+/.build/
 
-# generated from the running kernel's BTF (run `make` to regenerate)
-/include/vmlinux.h
+# compiled BPF objects + generated CO-RE header
+/bin/*
+!/bin/.gitkeep
+/src/bpf/include/vmlinux.h
+
+# kernel-matrix run output (build/kernel-matrix.sh)
+/.kmatrix/
 
 # python bytecode (demo/)
 __pycache__/
