@@ -163,7 +163,6 @@ static __always_inline int handle(struct __sk_buff *skb, __u8 dir)
     __u32 limit = kind == KIND_RESPONSE ? RESP_CAP : (DATA_MAX - 1);
     if (cap > limit)
         cap = limit;
-    cap &= (DATA_MAX - 1);                   /* make the bound explicit for the verifier */
     if (cap == 0)
         return TCX_NEXT;
 
@@ -178,8 +177,22 @@ static __always_inline int handle(struct __sk_buff *skb, __u8 dir)
     e->dir       = dir;
     e->kind      = kind;
     e->total_len = plen;
-    e->captured  = cap;
-    if (bpf_skb_load_bytes(skb, poff, e->data, cap) < 0) {
+    /* bpf_skb_load_bytes()'s length is ARG_CONST_SIZE: the verifier requires it
+       to be provably 1..sizeof(dst). clang otherwise keeps a parallel,
+       un-narrowed copy of `cap` (kept live to store e->captured) and passes
+       *that* register as the length, so stricter verifiers (Linux 6.12+) reject
+       the read as possibly zero-sized ("R4 invalid zero-sized read"). Forcing
+       the length through a volatile stack slot makes the value the helper sees a
+       fresh memory reload that the verifier can only bound via the check below —
+       so the exact register passed is provably in range. */
+    volatile __u32 vlen = cap;
+    __u32 rlen = vlen;
+    if (rlen == 0 || rlen > DATA_MAX) {
+        bpf_ringbuf_discard(e, 0);
+        return TCX_NEXT;
+    }
+    e->captured  = rlen;
+    if (bpf_skb_load_bytes(skb, poff, e->data, rlen) < 0) {
         bpf_ringbuf_discard(e, 0);
         return TCX_NEXT;
     }
