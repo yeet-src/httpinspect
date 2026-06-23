@@ -29,15 +29,26 @@ yeet run .      # watch every up interface, including loopback
 
 With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerates the up interfaces, attaches at the TC layer, and starts ranking endpoints. Flags tune what it watches and how it groups (pass them after `--`, so the runtime routes them to the script):
 
-| flag             | default       | meaning                                                              |
-| ---------------- | ------------- | -------------------------------------------------------------------- |
-| `--iface=<list>` | all up ifaces | comma-separated interface names to watch, e.g. `--iface=lo,eth0`     |
-| `--keep-query`   | off           | keep query strings distinct — `/x?id=1` and `/x?id=2` stay separate rows instead of collapsing into one |
+| flag               | default        | meaning                                                              |
+| ------------------ | -------------- | -------------------------------------------------------------------- |
+| `--iface=<list>`   | all (wildcard) | comma-separated interface names to watch, e.g. `--iface=lo,eth0`. Unset → the daemon wildcard-attaches every host interface (this skips `lo`); naming interfaces keeps `lo`. |
+| `--keep-query`     | off            | keep query strings distinct — `/x?id=1` and `/x?id=2` stay separate rows instead of collapsing into one |
+| `--no-tasks`       | off            | don't attach into ECS task network namespaces (host netns only)      |
+| `--task-loopback`  | off            | also hook the in-task `lo` (the 127.0.0.1 leg); best-effort, TCX-on-lo EINVALs on some kernels |
+| `--reconcile-ms=N` | 5000           | how often to re-scan for ECS tasks that started or stopped           |
 
 ```sh
-yeet run . -- --iface lo,eth0   # only these interfaces
+yeet run . -- --iface lo,eth0   # only these interfaces (explicit list keeps lo)
 yeet run . -- --keep-query      # /x?id=1 and /x?id=2 stay separate rows
+yeet run . -- --task-loopback   # also capture same-task 127.0.0.1 upstreams
 ```
+
+On a host daemon, requests served from **ECS awsvpc tasks** live in each task's
+own network namespace, which a host-netns attach can't reach. `httpinspect`
+discovers running tasks (by their `/ecs/<taskId>` cgroup) and attaches into each
+task's netns, re-scanning every `--reconcile-ms` as tasks come and go. Running
+it as a sidecar inside the task instead captures that task's `eth0` + `lo`
+directly.
 
 Runs until `Ctrl-C`. Resize the terminal and the table reflows; needs a real terminal (it's a TUI — don't pipe or redirect the output).
 

@@ -10,8 +10,7 @@
 // `rows`, so a from() over `rows` would tear the ring buffer down whenever
 // detail is open. A daemon-style always-on feed is the right shape here.
 import { signal } from "yeet:tui";
-import { RingBuf } from "yeet:bpf";
-import { control } from "@/probes/probe.js";
+import { subscribe } from "@/probes/probe.js";
 import { fmtCount } from "@/lib/format.js";
 
 export const TICK_MS = 400; /* redraw cadence between per-second rate samples */
@@ -210,9 +209,10 @@ function sampleRates() {
   }
 }
 
-// Start the feed. The ring buffer is single-consumer and ingestion is
-// always-on (see the module header), so wire it up at load time.
-new RingBuf(control, "events").subscribe(
+// Start the feed. probe.js fans every netns ring buffer (host + each ECS task)
+// into one consumer, and ingestion is always-on (see the module header), so
+// register at load time.
+subscribe(
   onEvent,
   (err) => console.error("[httptop] ringbuf error:", err.message),
 );

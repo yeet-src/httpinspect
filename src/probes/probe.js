@@ -1,77 +1,201 @@
-// Shared BPF object. The single src/bpf/httptop.bpf.c unit is compiled and
-// linked into bin/probe.bpf.o and loaded once here; the feature probe
-// (httptop.js) imports this `control` and reads the `events` ring buffer.
-// All binds + attaches happen before the single start(), so they live here.
+// Shared BPF attach layer. The single src/bpf/httptop.bpf.c unit is compiled to
+// bin/probe.bpf.o and loaded here; the feature probe (httptop.js) registers a
+// `subscribe(onEvent)` consumer and this module fans every captured event into
+// it. All attaches live here.
 //
-// httptop attaches at the TC layer (TCX, ingress + egress). By default we hand
-// the daemon a *wildcard* (omit `ifindex`): it enumerates and attaches every
-// supported host interface itself. The wildcard path skips loopback (TCX attach
-// EINVALs on `lo`), so the 127.0.0.1 leg is NOT captured in that mode — pass
-// `--iface a,b` to switch to an explicit ifindex list (which keeps `lo`)
-// narrowed to the named interfaces. Wildcard also only covers the host netns;
-// interfaces inside other netns (e.g. ECS awsvpc task ENIs) are not reached
-// from a host daemon. This module imports only yeet:bpf — no `@/` aliases — so
-// it stays runnable on its own for the import.meta.main self-test below.
+// httptop attaches at the TC layer (TCX, ingress + egress). The loader allows
+// only one attach spec per program name per BpfObject, so each network
+// namespace is its own BpfObject (hence its own `events` ring buffer) and this
+// module owns every ring-buffer subscription, fanning them into the one
+// consumer httptop registers.
+//
+// Coverage, by namespace:
+//   • host netns — wildcard by default (the daemon enumerates + attaches every
+//     supported interface itself); `--iface a,b` switches to an explicit
+//     ifindex list narrowed to those names (which, unlike wildcard, keeps `lo`).
+//   • ECS awsvpc task netns — a host daemon's wildcard never reaches these (the
+//     task ENI lives inside the task's netns), so we discover running tasks and
+//     attach into each task's netns explicitly, reconciling on a timer as tasks
+//     start and stop. `--no-tasks` disables this; `--task-loopback` also hooks
+//     the in-task `lo` (the 127.0.0.1 leg), best-effort since TCX-on-lo EINVALs
+//     on some kernels.
+//
+// This module imports only yeet:bpf — no `@/` aliases — so it stays runnable on
+// its own for the import.meta.main self-test below.
 import { BpfObject, RingBuf } from "yeet:bpf";
 
+// ---- args ---------------------------------------------------------------
 const wanted = yeet.args.iface
   ? new Set(String(yeet.args.iface).split(",").map((s) => s.trim()).filter(Boolean))
   : null;
+const RECONCILE_MS = Math.max(1000, Number(yeet.args.reconcile_ms) || 5000);
+const taskLoopback = !!yeet.args.task_loopback;
+const noTasks = !!yeet.args.no_tasks;
 
-// The TCX attach spec. No --iface → wildcard (omit `ifindex`): the daemon
-// enumerates and attaches every supported host interface. --iface a,b → an
-// explicit ifindex list, resolved from the graph and narrowed to those names
-// (this path keeps `lo`, which the wildcard path drops).
-let tcx;
-let ifaceLabel;
-if (wanted) {
-  let ifaces = [];
-  try {
-    const { data, errors } = await yeet.graph.query(
-      `{ network_interfaces { index name is_up } }`,
-    );
-    if (errors) throw new Error(errors[0].message);
-    ifaces = (data.network_interfaces || []).filter((i) => i.is_up && wanted.has(i.name));
-  } catch (err) {
-    console.error(`[httptop] could not list interfaces: ${err.message}`);
-    yeet.exit();
-  }
-  const ifindexes = ifaces.map((i) => i.index);
-  if (ifindexes.length === 0) {
-    console.error("[httptop] no matching up interfaces to watch");
-    yeet.exit();
-  }
-  tcx = { kind: "tcx", ifindex: ifindexes };
-  ifaceLabel = ifaces.map((i) => i.name).join(",");
-} else {
-  tcx = { kind: "tcx" }; // wildcard — daemon attaches to every supported iface
-  ifaceLabel = "all (wildcard)";
+// ---- low-level helpers --------------------------------------------------
+const EXE = { exe: "../bin/probe.bpf.o", base: import.meta.dirname };
+const RINGBUF = { kind: "ringbuf", btf_struct: "http_event" };
+
+// Race a graph query against a deadline — a pathological query can otherwise
+// wedge the daemon for every run until it restarts.
+function withTimeout(p, ms, what) {
+  return Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms}ms`)), ms)),
+  ]);
 }
 
-// What the status bar shows for the watched interfaces.
-export { ifaceLabel };
+// Build + start one attachment: both directions of the program against `spec`.
+function startAttach(spec) {
+  return new BpfObject(EXE)
+    .bind("events", RINGBUF)
+    .attach("on_ingress", spec)
+    .attach("on_egress", spec)
+    .start();
+}
 
-// `base: import.meta.dirname` resolves the object path against the running bundle.
-const probe = new BpfObject({ exe: "../bin/probe.bpf.o", base: import.meta.dirname });
+// ---- host-netns attach spec --------------------------------------------
+// No --iface → wildcard (omit `ifindex`); --iface a,b → explicit ifindex list
+// resolved from the graph and narrowed to those names.
+async function hostSpec() {
+  if (!wanted) return { spec: { kind: "tcx" }, label: "all (wildcard)" };
+  const { data, errors } = await withTimeout(
+    yeet.graph.query(`{ network_interfaces { index name is_up } }`),
+    2000, "interface query",
+  );
+  if (errors) throw new Error(errors[0].message);
+  const ifaces = (data.network_interfaces || []).filter((i) => i.is_up && wanted.has(i.name));
+  const ifindex = ifaces.map((i) => i.index);
+  if (ifindex.length === 0) throw new Error("no matching up interfaces to watch");
+  return { spec: { kind: "tcx", ifindex }, label: ifaces.map((i) => i.name).join(",") };
+}
 
-export const control = await (async () => {
-  try {
-    return await probe
-      .bind("events", { kind: "ringbuf", btf_struct: "http_event" })
-      .attach("on_ingress", tcx)
-      .attach("on_egress", tcx)
-      .start();
-  } catch (err) {
-    console.error(`[httptop] failed to load eBPF: ${err.message}`);
-    console.error("[httptop] need CAP_BPF/root and a compiled bin/probe.bpf.o (run `make`).");
-    yeet.exit();
+// ---- ECS task discovery (host daemon → task netns) ----------------------
+// Every container in an awsvpc task shares one netns, and ECS nests each task
+// under an `/ecs/<taskId>` cgroup, so one representative pid per <taskId> is
+// enough to enter that netns. Grouping by cgroup path is container-runtime
+// agnostic (Docker or containerd) as long as ECS uses its default `/ecs`
+// cgroup parent.
+const TASK_RE = /\becs[/-]([0-9a-f]{32})\b/i;
+async function discoverTasks() {
+  const { data, errors } = await withTimeout(
+    yeet.graph.query(`{ procs { pid cgroups { pathname } } }`),
+    3000, "task discovery",
+  );
+  if (errors) throw new Error(errors[0].message);
+  const byTask = new Map(); // taskId -> first live pid seen in it
+  for (const p of data.procs || []) {
+    for (const c of p.cgroups || []) {
+      const m = TASK_RE.exec(c.pathname || "");
+      if (m && !byTask.has(m[1])) byTask.set(m[1], p.pid);
+    }
   }
-})();
+  return byTask;
+}
 
-// Standalone correctness probe — `yeet run src/probes/probe.js` dumps the
-// endpoints it aggregates over a few seconds, so you can eyeball that the
-// kernel filter, the btf_struct envelope, and the loopback dedup all behave
-// before any UI exists. Dormant once httptop.js imports `control`.
+// ---- attachment registry + event fan-in ---------------------------------
+const active = new Map(); // key -> { control, sub: Promise<subscription> | null }
+let consumer = null;      // { onEvent, onError } — registered by httptop.js
+
+function subscribeRing(control) {
+  return new RingBuf(control, "events").subscribe(
+    (raw) => { if (consumer) consumer.onEvent(raw); },
+    (err) => { if (consumer && consumer.onError) consumer.onError(err); },
+  );
+}
+
+// The one ingestion entry point. httptop.js calls this once; we wire its
+// callback to every current ring buffer and to any added later.
+export function subscribe(onEvent, onError) {
+  consumer = { onEvent, onError };
+  for (const entry of active.values()) {
+    if (!entry.sub) entry.sub = subscribeRing(entry.control);
+  }
+}
+
+async function add(key, spec) {
+  if (active.has(key)) return;
+  const control = await startAttach(spec);
+  const entry = { control, sub: null };
+  if (consumer) entry.sub = subscribeRing(control);
+  active.set(key, entry);
+}
+
+async function remove(key) {
+  const entry = active.get(key);
+  if (!entry) return;
+  active.delete(key);
+  try { if (entry.sub) (await entry.sub).unsubscribe(); } catch { /* already gone */ }
+  try { await entry.control.stop(); } catch { /* already gone */ }
+}
+
+// ---- reconcile: keep `active` in sync with the live ECS task set ---------
+// Each task is its own BpfObject, so we add new tasks and drop departed ones
+// individually — existing attachments are never torn down, so task churn costs
+// no events on flows already being watched.
+let taskCount = 0;
+async function reconcile() {
+  let tasks;
+  try {
+    tasks = await discoverTasks();
+  } catch (err) {
+    console.error(`[httptop] task discovery failed: ${err.message}`);
+    return;
+  }
+
+  const desired = new Map(); // key -> spec
+  for (const [taskId, pid] of tasks) {
+    desired.set(`task:${taskId}`, { kind: "tcx", ns: { pid } }); // wildcard inside the task netns
+    if (taskLoopback) {
+      desired.set(`task:${taskId}:lo`, { kind: "tcx", ns: { pid }, ifindex: [1] });
+    }
+  }
+
+  for (const [key, spec] of desired) {
+    if (!active.has(key)) {
+      try {
+        await add(key, spec);
+      } catch (err) {
+        console.error(`[httptop] attach ${key} failed: ${err.message}`);
+      }
+    }
+  }
+  for (const key of [...active.keys()]) {
+    if (key !== "host" && !desired.has(key)) await remove(key);
+  }
+  taskCount = tasks.size;
+}
+
+// ---- bring up the host attach (fatal on failure), then tasks ------------
+let hostLabel = "?";
+try {
+  const { spec, label } = await hostSpec();
+  hostLabel = label;
+  await add("host", spec);
+} catch (err) {
+  console.error(`[httptop] failed to load eBPF: ${err.message}`);
+  console.error("[httptop] need CAP_BPF/root and a compiled bin/probe.bpf.o (run `make`).");
+  yeet.exit();
+}
+
+// The host BpfControl, exported for the import.meta.main self-test below.
+export const control = active.get("host").control;
+
+if (!noTasks) {
+  await reconcile().catch((err) => console.error(`[httptop] initial reconcile: ${err?.message ?? err}`));
+  setInterval(() => reconcile().catch(() => {}), RECONCILE_MS);
+}
+
+// What the status bar shows for the watched namespaces (snapshot at startup).
+export let ifaceLabel = noTasks
+  ? hostLabel
+  : `${hostLabel}${taskCount ? ` + ${taskCount} task netns` : ""}`;
+
+// Standalone correctness probe — `yeet run src/probes/probe.js` aggregates the
+// endpoints it sees across the host netns *and* every ECS task netns for a few
+// seconds, then prints the counts before exiting. A headless check that the
+// kernel filter, the btf_struct envelope, and the task-netns attach all behave
+// before any UI exists. Dormant once httptop.js imports this module.
 if (import.meta.main) {
   const REQ = /^([A-Z]+) +(\S+) +HTTP\/\d\.\d$/;
   const parse = (bytes) => {
@@ -92,7 +216,7 @@ if (import.meta.main) {
   const stats = new Map();
   const seen = new Set();
   let dupes = 0;
-  await new RingBuf(control, "events").subscribe((raw) => {
+  subscribe((raw) => {
     const ev = raw.http_event ?? raw;
     const k = `${ev.family}:${ev.sport}>${ev.dport}#${ev.seq}`;
     if (seen.has(k)) { dupes++; return; }
@@ -106,9 +230,9 @@ if (import.meta.main) {
 
   await new Promise((r) => setTimeout(r, 4500));
   console.log(`[verify] watching ${ifaceLabel}`);
-  console.log(`[verify] deduped ${dupes} loopback double-sightings`);
+  console.log(`[verify] deduped ${dupes} duplicate sightings`);
   console.log("[verify] aggregated endpoints (count desc):");
   [...stats.entries()].sort((a, b) => b[1] - a[1]).forEach(([k, c]) => console.log(`  ${String(c).padStart(3)}  ${k}`));
-  await control.stop();
+  for (const key of [...active.keys()]) await remove(key);
   yeet.exit();
 }
