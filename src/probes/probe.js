@@ -21,7 +21,7 @@
 //     on some kernels.
 //
 // This module imports only yeet:bpf — no `@/` aliases — so it stays runnable on
-// its own for the import.meta.main self-test below.
+// its own for the --selftest correctness probe below.
 import { BpfObject, RingBuf } from "yeet:bpf";
 
 // ---- args ---------------------------------------------------------------
@@ -187,15 +187,14 @@ try {
   yeet.exit();
 }
 
-// The host BpfControl, exported for the import.meta.main self-test below.
+// The host BpfControl, exported for the --selftest correctness probe below.
 export const control = active.get("host").control;
 
 // Discovery + per-task attach runs OFF the critical path: a fire-and-forget
 // initial scan plus a timer, so the UI mounts immediately and tasks attach a
-// beat later as scans complete. The self-test (below) drives its own scan so it
-// can report what it found. Skipped here under import.meta.main to avoid racing
-// that.
-if (!import.meta.main && !noTasks) {
+// beat later as scans complete. Skipped under --selftest, which drives its own
+// scan (below) so it can report what it found.
+if (!noTasks && !yeet.args.selftest) {
   reconcile().catch(() => {});
   setInterval(() => reconcile().catch(() => {}), RECONCILE_MS);
 }
@@ -203,12 +202,16 @@ if (!import.meta.main && !noTasks) {
 // What the status bar shows for the watched namespaces.
 export const ifaceLabel = hostLabel;
 
-// Standalone correctness probe — `yeet run src/probes/probe.js` aggregates the
+// Standalone correctness probe — `yeet run . -- --selftest` aggregates the
 // endpoints it sees across the host netns *and* every ECS task netns for a few
 // seconds, then prints the counts before exiting. A headless check that the
-// kernel filter, the btf_struct envelope, and the task-netns attach all behave
-// before any UI exists. Dormant once httptop.js imports this module.
-if (import.meta.main) {
+// kernel filter, the btf_struct envelope, and the task-netns attach all behave.
+//
+// Gated on an explicit flag, NOT import.meta.main: esbuild bundles every module
+// into one src/index.jsx whose import.meta.main is true for the whole file, so
+// import.meta.main can't tell "run the probe" from "run the app" — relying on it
+// would fire this block (and its yeet.exit) during a normal `yeet run .`.
+if (yeet.args.selftest) {
   const REQ = /^([A-Z]+) +(\S+) +HTTP\/\d\.\d$/;
   const parse = (bytes) => {
     let t = "";

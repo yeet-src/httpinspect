@@ -36,6 +36,7 @@ With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerat
 | `--no-tasks`       | off            | don't attach into ECS task network namespaces (host netns only)      |
 | `--task-loopback`  | off            | also hook the in-task `lo` (the 127.0.0.1 leg); best-effort, TCX-on-lo EINVALs on some kernels |
 | `--reconcile-ms=N` | 5000           | how often to re-scan for ECS tasks that started or stopped           |
+| `--selftest`       | off            | headless capture check — aggregate for ~4s, print counts, exit (no TUI) |
 
 ```sh
 yeet run . -- --iface lo,eth0   # only these interfaces (explicit list keeps lo)
@@ -229,7 +230,7 @@ Because it's encrypted before it hits the wire. At the TC layer the payload is c
 That's the `Host:` header the client sent. Services addressed by name show their name; those addressed by IP show the IP.
 
 **Can I get a quick check without the full TUI?**
-Yes. `yeet run src/probes/probe.js` attaches the probe, aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline.
+Yes. `yeet run . -- --selftest` attaches the probe (host + each ECS task netns), aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline. (It's a flag, not a separate entry: `yeet run` bundles the whole app into one `src/index.jsx`, so `import.meta.main` can't distinguish the probe from the app.)
 
 ## License
 
