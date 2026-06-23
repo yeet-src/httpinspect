@@ -1,0 +1,198 @@
+name: kernel-matrix
+
+# Build the BPF object once per job, then boot a range of kernels and confirm
+# each one's verifier accepts every program in bin/probe.bpf.o. The check is
+# the vendored static `veristat` (it loads each program and reports a verdict);
+# kernels come from cilium's little-vm-helper (quay.io/lvh-images), booted under
+# QEMU/KVM on the runner. Each job writes a detail table to its step summary and
+# uploads its result; the final `matrix` job pivots them into one ✅/❌ grid.
+#
+# Tune `matrix.kernel` to the kernel lines your script must support (`6.6`,
+# `bpf-next`, …). Each line is resolved to a concrete image at run time rather
+# than using the floating `<ver>-main` tag, which the action can't consume:
+# little-vm-helper@v0.0.30 derives the VM image filename by stripping a trailing
+# *numeric* build stamp, so a `-main` tag yields a name that doesn't match the
+# file `lvh` actually unpacks and the run dies with "invalid reference format".
+# So each job looks up the newest date-stamped tag (`<ver>-YYYYMMDD.HHMMSS`,
+# which the action handles) from the quay registry — always tracking the latest
+# build, with no tag to bump and immune to quay's pruning of old stamps. httptop
+# attaches at the TC layer via TCX (Linux 6.6+), so the list starts at 6.6 —
+# older kernels can't load the tcx/* programs at all.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Kernel lines to verify. Each is resolved to its newest date-stamped
+        # lvh image at run time (see the header). httptop needs TCX (Linux
+        # 6.6+), so the list starts at 6.6 — older kernels can't load the tcx/*
+        # programs at all.
+        kernel:
+          - '6.6'    # oldest LTS with TCX (Linux 6.6) — the floor
+          - '6.12'   # LTS
+          - '6.18'   # recent mainline
+          - 'bpf-next'
+    name: kernel ${{ matrix.kernel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve newest lvh image tag
+        id: img
+        env:
+          KERNEL: ${{ matrix.kernel }}
+        run: |
+          set -euo pipefail
+          # Newest <line>-YYYYMMDD.HHMMSS tag (date-stamps sort
+          # lexicographically, so tail -1 is the most recent build).
+          newest="$(curl -sf "https://quay.io/api/v1/repository/lvh-images/kind/tag/?onlyActiveTags=true&limit=100&filter_tag_name=like:${KERNEL}-" \
+            | jq -r '.tags[].name' \
+            | grep -E "^${KERNEL}-[0-9]{8}\.[0-9]+$" | sort | tail -1)"
+          [ -n "$newest" ] || { echo "::error::no date-stamped tag found for kernel line '${KERNEL}'"; exit 1; }
+          echo "resolved ${KERNEL} -> ${newest}"
+          echo "tag=${newest}" >> "$GITHUB_OUTPUT"
+
+      - name: Build BPF object + stage veristat
+        run: |
+          set -euo pipefail
+          # Builds bin/probe.bpf.o with the vendored static toolchain, also
+          # populating the per-machine toolchain cache (clang/bpftool/veristat).
+          make bpf
+
+          # Resolve the vendored static veristat the same way build/toolchain.mk
+          # does, and stage it into bin/ so the VM finds it under /host. It is
+          # fully static, so it runs in any kernel image's rootfs.
+          . build/toolchain.lock
+          arch="$(uname -m)"; [ "$arch" = arm64 ] && arch=aarch64
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/yeet/toolchain/v${TOOLCHAIN_VERSION}/${arch}"
+          if [ ! -x "$cache/veristat" ]; then
+            echo "::error::veristat is not in the pinned toolchain (v${TOOLCHAIN_VERSION}). Bump build/toolchain.lock to a toolchain release that ships veristat."
+            exit 1
+          fi
+          install -Dm755 "$cache/veristat" bin/veristat
+          file bin/veristat bin/probe.bpf.o
+
+      - name: Verify on kernel ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: veristat-${{ matrix.kernel }}
+          image: kind
+          image-version: ${{ steps.img.outputs.tag }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: 'true'
+          cmd: |
+            cd /host
+            OUT_CSV=/host/.kmatrix/result.csv sh build/verify-kernel.sh
+
+      - name: Render kernel summary
+        if: always()
+        env:
+          KVER: ${{ matrix.kernel }}
+          KCSV: ${{ github.workspace }}/.kmatrix/result.csv
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import csv, os
+          kver, path = os.environ["KVER"], os.environ["KCSV"]
+          if not os.path.exists(path):
+              print(f"### kernel `{kver}` — ⚠️ no result (build or boot failed)\n")
+              raise SystemExit
+          rows = list(csv.DictReader(open(path)))
+          mark = lambda v: "✅" if v == "success" else "❌"
+          ok = all(r["verdict"] == "success" for r in rows)
+          head = "✅ all programs loaded" if ok else "❌ verifier rejected a program"
+          print(f"### kernel `{kver}` — {head}\n")
+          print("| Program | Verdict | Insns | States |")
+          print("|---|:---:|--:|--:|")
+          for r in rows:
+              print(f"| `{r['prog_name']}` | {mark(r['verdict'])} | {r['total_insns']} | {r['total_states']} |")
+          print()
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmatrix-${{ matrix.kernel }}
+          path: ${{ github.workspace }}/.kmatrix/result.csv
+          if-no-files-found: ignore
+
+  matrix:
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    name: matrix summary
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+          pattern: kmatrix-*
+
+      - name: Render matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import csv, glob, os, re
+
+          # One CSV per kernel under results/kmatrix-<kernel>/result.csv.
+          data, kernels, progs = {}, [], []
+          for d in sorted(glob.glob("results/kmatrix-*")):
+              kver = os.path.basename(d)[len("kmatrix-"):]
+              f = os.path.join(d, "result.csv")
+              if not os.path.exists(f):
+                  data[kver] = None
+                  kernels.append(kver)
+                  continue
+              data[kver] = {r["prog_name"]: r["verdict"] for r in csv.DictReader(open(f))}
+              kernels.append(kver)
+              for p in data[kver]:
+                  if p not in progs:
+                      progs.append(p)
+
+          # Order kernels by version, bpf-next last.
+          def keyf(k):
+              m = re.match(r"(\d+)\.(\d+)", k)
+              return (1, 0, 0) if not m else (0, int(m.group(1)), int(m.group(2)))
+          kernels.sort(key=keyf)
+          short = lambda k: re.sub(r"-(main|\d{8}\.\d+)$", "", k)
+
+          print("## 🐧 Kernel verification matrix\n")
+          if not progs:
+              print("⚠️ No results were produced — check the per-kernel job logs.\n")
+              raise SystemExit
+          print("| Program | " + " | ".join(short(k) for k in kernels) + " |")
+          print("|---|" + "|".join(":-:" for _ in kernels) + "|")
+          fail = 0
+          for p in progs:
+              cells = []
+              for k in kernels:
+                  d = data[k]
+                  if d is None or p not in d:
+                      cells.append("⚪")
+                  elif d[p] == "success":
+                      cells.append("✅")
+                  else:
+                      cells.append("❌"); fail += 1
+              print(f"| `{p}` | " + " | ".join(cells) + " |")
+          print()
+          print("✅ accepted · ❌ rejected · ⚪ not run\n")
+          total = len(progs) * len([k for k in kernels if data[k] is not None])
+          verb = "all programs loaded on every kernel" if fail == 0 else f"{fail} of {total} program×kernel checks failed"
+          print(f"**{len(progs)} program(s) × {len(kernels)} kernel(s) — {verb}.**")
+          PY
+
+      - name: Gate on any rejection
+        run: |
+          # Fail the run if any per-kernel job failed (a rejection or a build/boot error).
+          if [ "${{ contains(needs.verify.result, 'failure') }}" = "true" ] || [ "${{ needs.verify.result }}" = "failure" ]; then
+            echo "::error::one or more kernels rejected a program (see the matrix summary)"
+            exit 1
+          fi

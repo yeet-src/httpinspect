@@ -1,20 +1,24 @@
-/* Application state + HTTP request ingest. Holds the live data the panels
- * read: a `rows` signal of endpoints sorted by count, plus running totals.
- * `startTicks()` drives the per-second rate computation and redraw cadence. */
-
+// HTTP ingest + aggregation — the kernel → user data layer. It subscribes to
+// the `events` ring buffer on the shared object, parses method + Host + path
+// out of each captured request, pairs responses to measure on-the-wire
+// latency, and aggregates by endpoint into the reactive signals the
+// components read (`rows`, `tick`) plus the `totals` / `endpoint()` lookups.
+//
+// Unlike the from() idiom (subscription tied to a signal being watched), the
+// subscription and tick timers are started eagerly at module load: ingestion
+// has to keep running on *both* screens, and the detail screen never reads
+// `rows`, so a from() over `rows` would tear the ring buffer down whenever
+// detail is open. A daemon-style always-on feed is the right shape here.
 import { signal } from "yeet:tui";
-
-import { fmtCount } from "./render.jsx";
+import { RingBuf } from "yeet:bpf";
+import { control } from "@/probes/probe.js";
+import { fmtCount } from "@/lib/format.js";
 
 export const TICK_MS = 400; /* redraw cadence between per-second rate samples */
 
 /* Collapse the query string so `/x?id=1` and `/x?id=2` aggregate together.
  * `--keep-query` keeps them distinct. */
 const keepQuery = !!yeet.args.keep_query;
-
-/* What the status bar shows for the watched interfaces; set by main once the
- * interface list is known. */
-export const info = { ifaceLabel: "" };
 
 /* endpoint key -> { method, host, path, count, prev, rate, peak, bytes,
  * first, last, hist, lat, status, lastMs } */
@@ -23,6 +27,7 @@ export const rows = signal([]);
 export const totals = { reqs: 0, bytes: 0, startMs: Date.now() };
 export const endpointCount = () => stats.size;
 export const endpoint = (key) => stats.get(key) ?? null;
+export const keyOf = (r) => `${r.method} ${r.host} ${r.path}`;
 
 /* Bumped every redraw tick. The detail screen reads it so it re-renders as an
  * endpoint's in-place fields (rate, latency, …) change — those mutations don't
@@ -31,31 +36,6 @@ export const tick = signal(0);
 
 export const HIST_LEN = 60;  /* req/s samples kept per endpoint (≈1 min) */
 export const LAT_LEN = 200;  /* recent response latencies kept (ms) */
-
-/* ---- navigation ---------------------------------------------------- */
-/* The dashboard has two screens. In the list, `sel` is the highlighted row
- * index. `focusKey` is null in the list and the pinned endpoint key when the
- * per-endpoint detail screen is open. Both are signals so the view reacts. */
-export const sel = signal(0);
-export const focusKey = signal(null);
-
-const endpointKey = (r) => `${r.method} ${r.host} ${r.path}`;
-
-export function moveSel(delta) {
-  const n = rows.get().length;
-  if (n === 0) return;
-  sel.set(Math.max(0, Math.min(n - 1, sel.get() + delta)));
-}
-
-/* Enter the detail screen for the currently highlighted endpoint. */
-export function enterDetail() {
-  const data = rows.get();
-  if (data.length === 0) return;
-  const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) focusKey.set(endpointKey(row));
-}
-
-export function exitDetail() { focusKey.set(null); }
 
 /* ---- parsing ------------------------------------------------------ */
 function bytesToLatin1(bytes, max) {
@@ -135,8 +115,8 @@ function isDuplicate(ev, now) {
 const pending = new Map(); // flowKey -> [entry, …]
 const flowKey = (ev) => `${ev.family}:${Math.min(ev.sport, ev.dport)}-${Math.max(ev.sport, ev.dport)}`;
 
-/* one ring-buffer event (an `http_event`) */
-export function onEvent(raw) {
+/* one ring-buffer event (an `http_event`, wrapped under its btf_struct name) */
+function onEvent(raw) {
   const ev = raw.http_event ?? raw;
   const now = Date.now();
   if (isDuplicate(ev, now)) return;
@@ -153,7 +133,7 @@ function onRequest(ev, data, now) {
   const req = parseRequest(data.subarray(0, Number(ev.captured)));
   if (!req) return;
 
-  const key = `${req.method} ${req.host} ${req.path}`;
+  const key = keyOf(req);
   let row = stats.get(key);
   if (!row) {
     row = { ...req, count: 0, prev: 0, rate: 0, peak: 0, bytes: 0,
@@ -224,13 +204,17 @@ function sampleRates() {
   tick.set(tick.get() + 1); // wake the detail screen (see `tick`)
 
   // Reflect live totals in the terminal title. `tty` is only defined in TTY
-  // mode (absent when piped/redirected, e.g. verify.js), so guard it.
+  // mode (absent when piped/redirected), so guard it.
   if (typeof tty !== "undefined") {
     tty.title(`httpinspect · ${fmtCount(totals.reqs)} reqs · ${stats.size} endpoints`);
   }
 }
 
-export function startTicks() {
-  setInterval(sampleRates, 1000);
-  setInterval(refresh, TICK_MS); // snappier redraw between rate ticks
-}
+// Start the feed. The ring buffer is single-consumer and ingestion is
+// always-on (see the module header), so wire it up at load time.
+new RingBuf(control, "events").subscribe(
+  onEvent,
+  (err) => console.error("[httptop] ringbuf error:", err.message),
+);
+setInterval(sampleRates, 1000);
+setInterval(refresh, TICK_MS); // snappier redraw between rate ticks

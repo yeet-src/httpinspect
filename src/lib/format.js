@@ -1,6 +1,6 @@
-/* Pure presentation toolkit: number/time formatters, method colors, and the
- * table's column widths. No application state — safe to import anywhere. */
-
+// Pure presentation helpers — strings, color, and the table's column widths.
+// No signals or BPF, so it's safe to import anywhere; the components reach it
+// through the `@/` alias (resolved at bundle time).
 import { rgb, idx } from "yeet:tui";
 
 /* Per-method accent colors; unknown methods fall back to plain grey. */
@@ -10,6 +10,8 @@ export const METHOD_COLORS = {
   OPTIONS: rgb(0x808080), CONNECT: rgb(0x808080), TRACE: rgb(0x808080),
 };
 export const METHOD_FALLBACK = idx(7);
+export const methodColor = (m) => METHOD_COLORS[m] || METHOD_FALLBACK;
+
 export const accent = rgb(0x4fc1ff); /* httptop brand + count column */
 export const rateOn = rgb(0x4ec9b0); /* a live (>0) req/s value */
 export const grid = idx(8);          /* table border */

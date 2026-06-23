@@ -22,12 +22,12 @@
 
 ```sh
 curl -fsSL https://yeet.cx | sh
-make            # compile bin/httptop.bpf.o (needs clang + bpftool)
+make            # compile bin/probe.bpf.o + bundle the JS (toolchain auto-fetched)
 yeet run .      # watch every up interface, including loopback
 ```
 [Manual install guide](https://yeet.cx/docs/install/manual-installation) | Linux only
 
-With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerates the up interfaces, attaches at the TC layer, and starts ranking endpoints. Flags tune what it watches and how it groups:
+With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerates the up interfaces, attaches at the TC layer, and starts ranking endpoints. Flags tune what it watches and how it groups (pass them after `--`, so the runtime routes them to the script):
 
 | flag             | default       | meaning                                                              |
 | ---------------- | ------------- | -------------------------------------------------------------------- |
@@ -35,8 +35,8 @@ With any plaintext HTTP flowing on the box, that's it — `httpinspect` enumerat
 | `--keep-query`   | off           | keep query strings distinct — `/x?id=1` and `/x?id=2` stay separate rows instead of collapsing into one |
 
 ```sh
-yeet run . --iface lo,eth0   # only these interfaces
-yeet run . --keep-query      # /x?id=1 and /x?id=2 stay separate rows
+yeet run . -- --iface lo,eth0   # only these interfaces
+yeet run . -- --keep-query      # /x?id=1 and /x?id=2 stay separate rows
 ```
 
 Runs until `Ctrl-C`. Resize the terminal and the table reflows; needs a real terminal (it's a TUI — don't pipe or redirect the output).
@@ -63,7 +63,7 @@ The mental model for what `httpinspect` reads:
 ## What you're looking at
 
 ```
-httpinspect · watching all (3) · plaintext HTTP only
+httpinspect · iface: all (3) · plaintext HTTP only
  #  METHOD  HOST            PATH              COUNT   REQ/S   LAST
  1  GET     shop.internal   /api/products      1843    27     0s
  2  POST    auth.internal   /login              512     4      1s
@@ -109,7 +109,18 @@ It updates in place as new traffic arrives — no need to back out and re-enter.
 
 ## How it works
 
-The core is in [`httptop.bpf.c`](httptop.bpf.c) and the JS rendering layer rooted at [`main.jsx`](main.jsx).
+The project follows the standard yeet-script layout: `src/probes/` is the only BPF-aware code (it owns the object and exposes plain signals), `src/components/` is pure presentation that reads those signals, and `src/lib/` is pure helpers. They reference each other through the `@/` source alias; `src/main.jsx` wires them together and owns input.
+
+```
+src/bpf/httptop.bpf.c    TC programs: detect + capture HTTP segments → ringbuf
+src/probes/probe.js      loads the shared BPF object, attaches TCX, exposes `control`
+src/probes/httptop.js    ingest: parse, pair responses for latency, aggregate → signals
+src/lib/format.js        formatters, method colors, column widths, sparkline (pure)
+src/components/*.jsx     pure UI: statusbar, list, detail, footer, legend
+src/main.jsx             entry: tty guard, navigation, mount, key input
+bin/probe.bpf.o          the linked BPF object lands here (built by `make`)
+demo/                    fake server + load generator for the recording
+```
 
 ### The BPF side
 
@@ -128,12 +139,13 @@ The one map connecting kernel to userspace is `events` — a `RINGBUF` bound by 
 
 The dashboard runs in yeet's V8 runtime, subscribing to that ring buffer and rendering the terminal UI with `yeet:tui`:
 
-| file            | responsibility                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------- |
-| `main.jsx`      | entry: tty guard, interface discovery, BPF attach, ringbuf subscribe, mount, key input          |
-| `state.js`      | live data + request/response ingest, latency pairing, status tally, rate ticks, selection       |
-| `render.jsx`    | formatters, method colors, column widths, sparkline (pure)                                      |
-| `dashboard.jsx` | panels + layout: the list and endpoint-detail screens (the Dashboard view)                      |
+| file                    | responsibility                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| `src/probes/probe.js`   | interface discovery, BPF load + TCX attach; exports the shared `control` and the iface label     |
+| `src/probes/httptop.js` | request/response ingest, latency pairing, status tally, rate ticks → the `rows` / `tick` signals |
+| `src/lib/format.js`     | formatters, method colors, column widths, sparkline (pure)                                       |
+| `src/components/*.jsx`  | the list and endpoint-detail screens, status bar, footer, legend (pure UI reading signals)       |
+| `src/main.jsx`          | tty guard, selection/navigation state, mount, key input                                          |
 
 In userspace, each response is paired with the oldest unmatched request on the same flow — the unordered port pair, since a response travels the reverse direction. The timestamp delta is the **on-the-wire latency**, and the status line gives the **code**; both are aggregated per endpoint.
 
@@ -141,10 +153,41 @@ In userspace, each response is paired with the oldest unmatched request on the s
 
 Reading requests at the TC layer means there's nothing to point traffic through and no app to reconfigure — the programs observe and copy request segments as the kernel moves them, including loopback, so local service-to-service chatter is covered without instrumenting anything. And because the method/`HTTP/` check happens in the kernel, ACKs and non-HTTP traffic never cost a ring-buffer write.
 
+## Building from source
+
+```sh
+make           # build bin/probe.bpf.o (clang + bpftool) + bundle the JS (esbuild)
+make bpf       # just the BPF object
+make bundle    # just the JS bundle (src/main.jsx -> src/index.jsx)
+make clean     # remove build artifacts
+```
+
+`make` runs two independent compilers: **clang + bpftool** compile every `src/bpf/*.bpf.c` and link them into one loadable object `bin/probe.bpf.o`; **esbuild** bundles `src/main.jsx` into `src/index.jsx`, inlining npm deps and the `@/` alias and leaving `yeet:*` builtins external. The toolchain (clang, bpftool, esbuild) is fetched into a per-machine cache on first build — no system C/BPF toolchain required. The generated CO-RE header `src/bpf/include/vmlinux.h` and `bin/` are build artifacts (gitignored).
+
+`#/` (project root) and `@/` (source root) are **bundle-time aliases** that esbuild resolves via `tsconfig` `paths`; the runtime resolver doesn't know them, which is why the BPF object is located with `import.meta.dirname` in `probes/probe.js`.
+
+## Testing across kernels
+
+A BPF program that loads on your laptop can be rejected by an older kernel's verifier. Run `make veristat` to load `bin/probe.bpf.o` with veristat on **your** kernel — a quick check that every program passes, plus per-program complexity. Loading programs needs privileges, so use `sudo`.
+
+`.github/workflows/kernel-matrix.yml` runs the same check across a matrix of kernels in CI (booting each in a VM and running veristat against the object), and `make veristat-matrix` runs that matrix locally on Linux + KVM. See the comments in `build/bpf.mk` for tuning the kernel set.
+
+## Try it without real traffic
+
+`demo/` is a self-contained traffic source so you can see the dashboard fill on a quiet box:
+
+```sh
+python3 demo/server.py &            # fake plaintext-HTTP server on 127.0.0.1:8731
+PORT=8731 bash demo/traffic.sh      # steady, weighted request mix over loopback
+yeet run . -- --iface lo            # watch it on loopback
+```
+
+`demo/record.sh` drives the same setup under `termgif` to regenerate `assets/http-endpoint.gif`.
+
 ## Requirements
 
 > [!IMPORTANT]
-> Linux with **BTF** (`CONFIG_DEBUG_INFO_BTF=y`) — needed for the TC context structs and the `sock` types the programs read. Default on current Arch, Fedora, Ubuntu, and Debian 12+. CO-RE means no per-kernel recompile.
+> Linux with **BTF** (`CONFIG_DEBUG_INFO_BTF=y`) — needed to generate `vmlinux.h` and for the TC context structs the programs read. Default on current Arch, Fedora, Ubuntu, and Debian 12+. CO-RE means no per-kernel recompile.
 >
 > A reasonably recent kernel with **TCX** support (`tcx` links, Linux 6.6+), plus the yeet daemon, which handles the privileged BPF load. `curl -fsSL https://yeet.cx | sh` installs it.
 
@@ -175,24 +218,12 @@ Because it's encrypted before it hits the wire. At the TC layer the payload is c
 That's the `Host:` header the client sent. Services addressed by name show their name; those addressed by IP show the IP.
 
 **Can I get a quick check without the full TUI?**
-Yes. `yeet run verify.js` attaches the probe, aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline.
-
-## Building from source
-
-```sh
-make          # generates include/vmlinux.h, builds bin/httptop.bpf.o
-make vmlinux  # force-refresh the kernel type header
-make clean    # remove the build artifacts
-```
-
-Needs `clang` (BPF target) and `bpftool`, plus your distro's `libbpf` / `libbpf-dev` for headers. The generated `include/vmlinux.h` and `bin/` are build artifacts (gitignored).
+Yes. `yeet run src/probes/probe.js` attaches the probe, aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline.
 
 ## License
 
-GPL-2.0. The BPF program declares `char LICENSE[] SEC("license") = "GPL"` in [`httptop.bpf.c`](httptop.bpf.c), required for the kernel helpers it uses.
+GPL-2.0. The BPF program declares `char LICENSE[] SEC("license") = "GPL"` in [`src/bpf/httptop.bpf.c`](src/bpf/httptop.bpf.c), required for the kernel helpers it uses.
 
 ---
 
 Built with [yeet](https://yeet.cx/docs/?utm_source=github&utm_medium=readme&utm_campaign=httpinspect), a JS runtime for writing eBPF programs and live system dashboards on Linux. Join us on [discord](https://discord.gg/dYZu9PjKB?utm_source=github&utm_medium=readme&utm_campaign=httpinspect).
-</content>
-</invoke>

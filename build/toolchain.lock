@@ -1,0 +1,96 @@
+# Pinned versions for the vendored build toolchain. Sourced by the build
+# and fetch scripts and by CI so every arch is built from identical inputs.
+
+# Toolchain bundle version. Each publish is an immutable, version-tagged
+# release `v<TOOLCHAIN_VERSION>` holding the whole set; consumers pin this one
+# number, and the cache is keyed by it (cache/yeet/toolchain/v<N>/<arch>/). CI
+# sets it to the next semver tag it computes from the [bump:*] commit markers
+# (default minor; see the README). A release is cut only when build/ or the
+# vendor workflow changes.
+TOOLCHAIN_VERSION=0.10.0
+
+# Where a consumer fetches assets from: the version-tagged release. The fetch
+# appends `/v<TOOLCHAIN_VERSION>/<tool>-<arch>`.
+TOOLCHAIN_BASE_URL=https://github.com/yeet-src/toolchain/releases/download
+
+# LLVM/clang — built fully-static from source (see Dockerfile.clang). clang is
+# the one tool we build rather than fetch, so consumers download the prebuilt
+# binary from our release assets; CI fills these checksums after building.
+# Empty until vendor.yml has published a build.
+LLVM_VERSION=22.1.8
+CLANG_SHA256_x86_64=440c6dbe473502e3d328fb155a3888bd3fdef7d81926afce048cd7e699c4aefa
+CLANG_SHA256_aarch64=105fb2d324095127a127bcba56702a86229ed8892ce6429802d30585fa270603
+
+# bpftool — official static binary from libbpf/bpftool, re-hosted on our
+# "toolchain" release so the build fetches everything from one place. CI
+# records the binary checksum (consumers verify the binary, not the upstream
+# tarball). The matching libbpf program headers (v/include/bpf) ride the same
+# version; CI records the headers-tarball checksum too.
+BPFTOOL_VERSION=7.7.0
+BPFTOOL_SHA256_x86_64=74bd16335aa1c40714fb50287a42766c6faa4958f969cce32fef89485ce4934c
+BPFTOOL_SHA256_aarch64=2b3fc4dd5e4e40bd8d670c5f1fa9693b3f879a122c0f6a3eb806dfc6735da6b7
+LIBBPF_HEADERS_SHA256=d712858662168e4e04cdc35e4a962a6056c429ed57461b974ec59b819c60e3c3
+
+# veristat — BPF verifier statistics tool, used to check that built `*.bpf.o`
+# programs load and to track verifier complexity. Official static binary from
+# libbpf/veristat (a mirror of the kernel tree's tool), re-hosted on our
+# "toolchain" release like bpftool. CI records the per-arch binary checksums
+# (consumers verify the binary, not the upstream tarball).
+VERISTAT_VERSION=0.5.1
+VERISTAT_SHA256_x86_64=fa81d2da6b0d33f73c5469e5a97e7d0afaf4e216635f57ae15428402381b95c0
+VERISTAT_SHA256_aarch64=847aa761493055f23ecc758468e8d17869a4905ff6b5eedadb993c1e9f75d1bd
+
+# GNU make — the build driver. Built static from source (tiny, fast). Since
+# make can't fetch itself, `yeet build` bootstraps it into the cache at the
+# shell level before invoking it. CI records the per-arch checksums.
+MAKE_VERSION=4.4.1
+MAKE_SHA256_x86_64=a92853c409617e84c2460672955ddc6c9f40032257c24cf743b237c5c235995d
+MAKE_SHA256_aarch64=d5d5a80c7d57795d9f13c57ecd5315b9602327370094830d7fa9e490fa2137eb
+
+# git — used to `git init` a freshly generated project. Built static from
+# source, lean (NO_CURL/NO_OPENSSL): init/add/commit/local ops only, no https
+# remotes (host git or yeet's resolver handle those). CI records checksums.
+GIT_VERSION=2.54.0
+GIT_SHA256_x86_64=0e9dff2f8fc0d44fa67971c01c46ddba710d07a2911278f7f066abec422f24b6
+GIT_SHA256_aarch64=19c6dda22c811324649e6e4aa8c369a8d822463d61d794d0e23e72fb77b5376c
+
+# esbuild — official static (Go) binary from the @esbuild/<platform> npm
+# package, re-hosted on our "toolchain" release. CI records the binary
+# checksum. Keep ESBUILD_VERSION in sync with template/package.json.
+ESBUILD_VERSION=0.28.1
+ESBUILD_SHA256_x86_64=0c6588b092a2c291a72bab90659f3c9e0e25e0fe59c9ac12b4dae4d945e5548c
+ESBUILD_SHA256_aarch64=51e829ba36f36be6d9aea6e329ddc4f9350302339b16aaca96a3cb97f64a8ebb
+
+# gh — the GitHub CLI, for release/PR automation (CI and consumer tooling).
+# Official static (Go) binary from cli/cli, re-hosted on our "toolchain"
+# release like esbuild. CI records the per-arch binary checksum (consumers
+# verify the binary, not the upstream tarball).
+GH_VERSION=2.95.0
+GH_SHA256_x86_64=62c11fbaa08835168c3d1acf8a645ac6268a13a5682c73581388c9df0c622617
+GH_SHA256_aarch64=706b030846db08d0dac0392d6f74416e0bbf0d9ac5ecbd54c9046305c10eac59
+
+# qemu — NOT part of the build toolchain: a fully-static qemu-system for the
+# optional kernel-matrix test runner (boots lvh kernel images). Built per-arch
+# from source (see Dockerfile.qemu / build-qemu.sh), trimmed to the binary plus
+# the few firmware blobs its machine loads. Needs host KVM + root at runtime, so
+# it's fetched on demand by the harness, never resolved by `make`. LIBSLIRP is a
+# build-time dep (user-mode networking) compiled static since Alpine has no
+# -static package for it.
+QEMU_VERSION=9.1.2
+LIBSLIRP_VERSION=4.8.0
+
+# lvh (cilium's little-vm-helper) — NOT a build tool: the VM orchestrator the
+# kernel-matrix test runner uses to boot kernel images, paired with the qemu
+# above. It's a single fully-static Go binary distributed only as an OCI image,
+# so we re-host it like bpftool/esbuild (see fetch-lvh.sh). CI records the
+# per-arch binary checksum; the runner fetches it on demand, never `make`.
+LVH_VERSION=v0.0.30
+LVH_SHA256_x86_64=ca3b958ffc08a4b65e4c6c8d29a4dad077acd11f146bc84f75a30ecaa031e900
+LVH_SHA256_aarch64=49b7cef6376c445c0ab23465ecc984a771e06b3b37c39b486a4fed7fb1ded476
+# Per-arch checksum of the published qemu-<arch>.tar.gz (binary + minimal
+# share/qemu blobs). CI records these; the matrix runner verifies the tarball.
+QEMU_SHA256_x86_64=2e26722e965018c145bab180cee8feace50f91841bf51b350f14527c0d5da637
+QEMU_SHA256_aarch64=6fe353ef43918c14088c7a3741bfac54e6c17084ea462454a5b2a525ba0aa330
+
+# Alpine base used for the musl-static clang build.
+ALPINE_TAG=alpine:3.21
