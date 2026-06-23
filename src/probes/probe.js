@@ -30,7 +30,10 @@ const wanted = yeet.args.iface
   : null;
 const RECONCILE_MS = Math.max(1000, Number(yeet.args.reconcile_ms) || 5000);
 const taskLoopback = !!yeet.args.task_loopback;
-const noTasks = !!yeet.args.no_tasks;
+// TEST BRANCH: wildcard-only by default. `yeet run .` attaches a single host
+// { kind: "tcx" } wildcard and nothing else, so you can see whether that alone
+// is sufficient. Pass --tasks to re-enable the per-ECS-task netns attach.
+const noTasks = !yeet.args.tasks;
 
 // ---- low-level helpers --------------------------------------------------
 const EXE = { exe: "../bin/probe.bpf.o", base: import.meta.dirname };
