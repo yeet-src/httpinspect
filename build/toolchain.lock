@@ -56,7 +56,7 @@ GIT_SHA256_aarch64=19c6dda22c811324649e6e4aa8c369a8d822463d61d794d0e23e72fb77b53
 
 # esbuild — official static (Go) binary from the @esbuild/<platform> npm
 # package, re-hosted on our "toolchain" release. CI records the binary
-# checksum. Keep ESBUILD_VERSION in sync with template/package.json.
+# checksum.
 ESBUILD_VERSION=0.28.1
 ESBUILD_SHA256_x86_64=0c6588b092a2c291a72bab90659f3c9e0e25e0fe59c9ac12b4dae4d945e5548c
 ESBUILD_SHA256_aarch64=51e829ba36f36be6d9aea6e329ddc4f9350302339b16aaca96a3cb97f64a8ebb
