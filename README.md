@@ -162,7 +162,7 @@ make bundle    # just the JS bundle (src/main.jsx -> src/index.jsx)
 make clean     # remove build artifacts
 ```
 
-`make` runs two independent compilers: **clang + bpftool** compile every `src/bpf/*.bpf.c` and link them into one loadable object `bin/probe.bpf.o`; **esbuild** bundles `src/main.jsx` into `src/index.jsx`, inlining npm deps and the `@/` alias and leaving `yeet:*` builtins external. The toolchain (clang, bpftool, esbuild) is fetched into a per-machine cache on first build — no system C/BPF toolchain required. The generated CO-RE header `src/bpf/include/vmlinux.h` and `bin/` are build artifacts (gitignored).
+`make` runs two independent compilers: **clang + bpftool** compile every `src/bpf/*.bpf.c` and link them into one loadable object `bin/probe.bpf.o`; **esbuild** bundles `src/main.jsx` into `src/index.jsx`, resolving the `@/` alias and leaving `yeet:*` builtins external. The toolchain (clang, bpftool, esbuild) is fetched into a per-machine cache on first build — no system C/BPF toolchain and no Node/npm required. The generated CO-RE header `src/bpf/include/vmlinux.h` and `bin/` are build artifacts (gitignored).
 
 `#/` (project root) and `@/` (source root) are **bundle-time aliases** that esbuild resolves via `tsconfig` `paths`; the runtime resolver doesn't know them, which is why the BPF object is located with `import.meta.dirname` in `probes/probe.js`.
 

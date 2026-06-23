@@ -3,7 +3,7 @@
 #   make         — build everything (BPF objects + JS bundle)
 #   make bpf     — compile bpf/*.bpf.c into bin/* only
 #   make veristat — load the built object with veristat (verifier check on this kernel)
-#   make bundle  — resolve npm/jsr deps and bundle the JS entry
+#   make bundle  — bundle the JS entry with the vendored esbuild
 #   make postgen — finalize a freshly generated project (git init)
 #   make clangd  — write a local .clangd pointing at the resolved toolchain
 #   make clean   — remove build artifacts
@@ -24,30 +24,25 @@
 include build/toolchain.mk
 include build/bpf.mk
 
-NPM ?= npm
-
 all: bpf bundle
 
-# Bundle the entry with the vendored esbuild. esbuild inlines node_modules
-# and honors tsconfig `paths` (so `@/` resolves at bundle time), while
-# `yeet:*` builtins and `*.bpf.o` objects stay external. The bundle is
-# written to src/index.jsx, which the entry ladder prefers over src/main.jsx
-# — so once built, that is what runs. The .jsx extension keeps the bundle
-# eligible for component auto-mount. Compiled BPF objects in bin/ are loaded
-# by path at runtime, never imported, so they are not bundled.
+# Bundle the entry with the vendored esbuild. esbuild honors tsconfig `paths`
+# (so `@/` resolves at bundle time), while `yeet:*` builtins and `*.bpf.o`
+# objects stay external. The bundle is written to src/index.jsx, which the
+# entry ladder prefers over src/main.jsx — so once built, that is what runs.
+# The .jsx extension keeps the bundle eligible for component auto-mount.
+# Compiled BPF objects in bin/ are loaded by path at runtime, never imported,
+# so they are not bundled.
 #
-# `npm install` still runs first: esbuild resolves the project's own
-# dependencies out of node_modules when inlining them.
+# No npm step: esbuild is the vendored toolchain binary and this project pulls
+# in no npm packages. Add a package.json + `npm install` only if you import
+# one — esbuild then inlines node_modules at bundle time.
 ESBUILD_FLAGS := --bundle --format=esm --platform=neutral \
 	--main-fields=module,main --conditions=import,module \
 	--outfile=src/index.jsx --jsx=automatic --jsx-import-source=yeet:tui
 
-bundle: node_modules | toolchain
+bundle: | toolchain
 	$(ESBUILD) src/main.jsx $(ESBUILD_FLAGS) '--external:yeet:*' '--external:*.bpf.o'
-
-node_modules: package.json
-	$(NPM) install
-	@touch node_modules
 
 # Post-generation finalize: initialize a git repository with the vendored git
 # (fetched via `vendored-git`). Idempotent — skipped if this is already a repo.
