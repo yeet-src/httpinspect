@@ -72,11 +72,13 @@ async function hostSpec() {
 
 // ---- ECS task discovery (host daemon → task netns) ----------------------
 // Every container in an awsvpc task shares one netns, and ECS nests each task
-// under an `/ecs/<taskId>` cgroup, so one representative pid per <taskId> is
-// enough to enter that netns. Grouping by cgroup path is container-runtime
-// agnostic (Docker or containerd) as long as ECS uses its default `/ecs`
-// cgroup parent.
-const TASK_RE = /ecs[/-]([0-9a-f]{32})\b/i;
+// under a per-task cgroup carrying its 32-hex task id, so one representative pid
+// per task id is enough to enter that netns. The id shows up two ways depending
+// on the cgroup driver:
+//   systemd:  /ecstasks.slice/ecstasks-<taskId>.slice/docker-<ctr>.scope
+//   cgroupfs: /ecs/<taskId>/<ctr>
+// Match both. (Plain `/ecs.service` — the agent — has no id and is ignored.)
+const TASK_RE = /ecs(?:tasks-|\/)([0-9a-f]{32})/i;
 // Diagnostics from the most recent scan, surfaced by the self-test so a 0-task
 // result is debuggable (wrong cgroup layout vs. nothing running) without a code
 // round-trip.
