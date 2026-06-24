@@ -101,7 +101,8 @@ tty.on("keydown", (e) => {
     // body view: < / > flip in/out, h/b collapse the headers/body sections,
     // ↑/↓ + PgUp/Dn scroll, esc back to the table.
     const scrollBy = (d) => scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + d)));
-    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { open.set(false); return; }
+    if (e.code === "Escape" || e.code === "ArrowLeft" || e.code === "ArrowRight" || e.key === "q") { open.set(false); return; }
+    else if (e.code === "Tab") { txnDir.set(txnDir.get() === 1 ? 0 : 1); scroll.set(0); }
     else if (e.key === ">") { txnDir.set(0); scroll.set(0); }
     else if (e.key === "<") { txnDir.set(1); scroll.set(0); }
     else if (e.key === "h") { hOpen.set(!hOpen.get()); scroll.set(0); }

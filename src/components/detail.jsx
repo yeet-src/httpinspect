@@ -5,7 +5,7 @@
 //     flipping the in (request) / out (response). esc steps back out.
 // Reads `focusKey`, `tick`, and the nav signals (`txnSel`, `open`, `txnDir`,
 // `scroll`). `open` distinguishes the two screens.
-import { Box, Text, bold, fg, rgb } from "yeet:tui";
+import { Box, Text, bold, fg, bg, rgb } from "yeet:tui";
 import {
   methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, statusColor, latColor,
@@ -85,6 +85,9 @@ function statusSpans(status) {
   return codes.flatMap(([code, n], i) =>
     [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
+
+// in / out as clickable-looking tabs; the active one gets a filled bg.
+const tab = (lbl, active) => active ? bg(selBg)(bold(fg(accent)(` ${lbl} `))) : fg(muted)(` ${lbl} `);
 
 // Endpoint header shown on both screens.
 function endpointHead(r, totals) {
@@ -176,16 +179,17 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
         const vis = Math.max(3, rows - 8);
         detailView.max = Math.max(0, lines.length - vis);
         const off = Math.min(Math.max(0, scroll.get()), detailView.max);
-        const dirLabel = dir === 1 ? "<< out (response)" : ">> in (request)";
         return (
           <Box direction="column" width="1fr" height="1fr">
             {endpointHead(r, totals)}
-            <Text overflow="ellipsis">
-              {fg(label)(`req ${txns.length ? sel + 1 : 0}/${txns.length}  ·  ${dirLabel}`)}
-              {txn && txn.status ? [fg(muted)("  ·  "), bold(fg(statusColor(txn.status))(String(txn.status)))] : ""}
-              {txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : ""}
-              {fg(muted)("   < > in/out · h/b collapse · ↑/↓ scroll · esc")}
-            </Text>
+            <Text overflow="ellipsis">{[
+              fg(label)(`req ${txns.length ? sel + 1 : 0}/${txns.length}`),
+              txn && txn.status ? fg(muted)("  ·  ") : "",
+              txn && txn.status ? bold(fg(statusColor(txn.status))(String(txn.status))) : "",
+              txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : "",
+              "    ", tab("in", dir === 0), " ", tab("out", dir === 1),
+              fg(muted)("  tab · h/b collapse · ↑/↓ scroll · ←/→ back"),
+            ]}</Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {lines.slice(off, off + vis).map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>

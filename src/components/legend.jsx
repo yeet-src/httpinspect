@@ -9,7 +9,7 @@ export default function Legend({ focusKey, open }) {
       const keys = !focusKey.get()
         ? [["↑/↓", "move"], ["PgUp/Dn", "page"], ["⏎", "requests"], ["q / Ctrl-C", "quit"]]
         : open.get()
-          ? [["< >", "in/out"], ["h/b", "collapse"], ["↑/↓", "scroll"], ["esc", "back"]]
+          ? [["tab", "in/out"], ["h/b", "collapse"], ["↑/↓", "scroll"], ["←/→", "back"]]
           : [["↑/↓", "request"], ["⏎", "open body"], ["esc", "back"]];
       return keys.flatMap(([k, d], i) => [i ? fg(muted)("    ") : "", bold(fg(accent)(k)), fg(muted)(" " + d)]);
     }}</Text>
