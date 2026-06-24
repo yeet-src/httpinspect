@@ -33,14 +33,26 @@ function colorJsonLine(line) {
   return spans.length ? spans : [line];
 }
 
-// A body → display lines. JSON gets reformatted (when it parses) and colored;
-// anything else is shown raw.
-function bodyLines(body) {
+// Hard-wrap a string into <=width chunks so long values don't clip off-screen.
+function wrapTo(line, width) {
+  if (line.length <= width) return [line];
+  const out = [];
+  for (let i = 0; i < line.length; i += width) out.push(line.slice(i, i + width));
+  return out;
+}
+
+// A body → display lines, wrapped to `width` and colored. JSON is reformatted
+// (when it parses) and syntax-colored; anything else is shown raw. Coloring a
+// wrapped chunk is best-effort — a value split mid-string just renders plain.
+function bodyLines(body, width) {
   const t = body.trim();
-  if (!(t.startsWith("{") || t.startsWith("["))) return body.split(/\r?\n/).map((l) => [l]);
-  let pretty = body;
-  try { pretty = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated/invalid: color raw */ }
-  return pretty.split(/\r?\n/).map(colorJsonLine);
+  let src = body;
+  if (t.startsWith("{") || t.startsWith("[")) {
+    try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
+  }
+  const out = [];
+  for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) out.push(colorJsonLine(c));
+  return out;
 }
 
 // One captured header line → "Name:" in pink, value plain.
@@ -49,9 +61,9 @@ function headerLine(l) {
   return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
-// Window top (in display lines) for the payload accordion, kept across renders
-// so the selected (expanded) payload stays on screen as the cursor moves.
-let detailTop = 0;
+// Max scroll offset the payload view allows, published each render so main.jsx
+// can clamp PgUp/PgDn line-scrolling without re-deriving the line count.
+export const detailView = { max: 0 };
 
 // Components are called `(opts, ...children)` by the JSX runtime, so read the
 // value pieces from the rest args — not a `children` prop.
@@ -96,25 +108,29 @@ function accordionLines(samples, sel, now, width) {
     const sep = s.text.indexOf("\r\n\r\n");
     const headText = sep >= 0 ? s.text.slice(0, sep) : s.text;
     const body = sep >= 0 ? s.text.slice(sep + 4) : "";
+    const W = Math.max(8, width - 2);
+    const indent = (sp) => [fg(muted)("  "), ...sp];
     lines.push([" "]);
     headText.split(/\r?\n/).forEach((l, j) =>
-      lines.push(j === 0 ? [fg(muted)("  "), bold(l)] : [fg(muted)("  "), ...headerLine(l)]));
+      wrapTo(l, W).forEach((c, k) =>
+        lines.push(indent(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c])))));
     if (body.trim()) {
       lines.push([" "]);
-      for (const bl of bodyLines(body)) lines.push([fg(muted)("  "), ...bl]);
+      for (const bl of bodyLines(body, W)) lines.push(indent(bl));
     }
     lines.push([" "]);
   });
   return { lines, selLine };
 }
 
-export default function DetailPanel({ focusKey, tick, endpoint, totals, size, detailSel }) {
+export default function DetailPanel({ focusKey, tick, endpoint, totals, size, detailSel, detailScroll }) {
   return (
     <Box border={{ line: "round", fg: grid }} padding={1} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       {() => {
-        tick.get();        // re-render on each state tick (fields mutate in place)
-        detailSel.get();   // and when the accordion cursor moves
+        tick.get();         // re-render on each state tick (fields mutate in place)
+        detailSel.get();    // and when the accordion cursor moves
+        detailScroll.get(); // and when the open payload is line-scrolled
         const r = endpoint(focusKey.get());
         if (!r) return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>;
         const now = Date.now();
@@ -129,10 +145,9 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
         const sel = Math.min(Math.max(0, detailSel.get()), Math.max(0, r.samples.length - 1));
         const { lines, selLine } = accordionLines(r.samples, sel, now, width);
         const vis = Math.max(3, rows - 15); // leave room for the stats block + chrome
-        if (selLine < detailTop) detailTop = selLine;
-        else if (selLine >= detailTop + vis) detailTop = selLine - vis + 1;
-        detailTop = Math.max(0, Math.min(detailTop, Math.max(0, lines.length - vis)));
-        const view = lines.slice(detailTop, detailTop + vis);
+        detailView.max = Math.max(0, lines.length - vis);
+        const off = Math.min(Math.max(0, detailScroll.get()), detailView.max);
+        const view = lines.slice(off, off + vis);
 
         return (
           <Box direction="column" width="1fr" height="1fr">
@@ -152,13 +167,13 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
             <Text> </Text>
             <Text overflow="ellipsis">
               {fg(label)(`Payloads (${r.samples.length})`)}
-              {r.samples.length ? fg(muted)(`  ·  ↑/↓ browse  ·  ${sel + 1}/${r.samples.length}`) : ""}
+              {r.samples.length ? fg(muted)(`  ·  ↑/↓ payload · PgUp/Dn scroll  ·  ${sel + 1}/${r.samples.length}`) : ""}
             </Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {r.samples.length === 0
                 ? <Text>{fg(muted)("no payloads captured yet")}</Text>
                 : view.map((l, idx) =>
-                    detailTop + idx === selLine
+                    off + idx === selLine
                       ? <Box width="1fr" bg={selBg}><Text height="1" break="none" overflow="hidden">{l}</Text></Box>
                       : <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>

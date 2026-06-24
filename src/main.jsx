@@ -18,7 +18,7 @@ import { ifaceLabel } from "@/probes/probe.js";
 import { rows, totals, tick, endpoint, endpointCount, keyOf } from "@/probes/httptop.js";
 import StatusBar from "@/components/statusbar.jsx";
 import ListPanel from "@/components/list.jsx";
-import DetailPanel from "@/components/detail.jsx";
+import DetailPanel, { detailView } from "@/components/detail.jsx";
 import Footer from "@/components/footer.jsx";
 import Legend from "@/components/legend.jsx";
 
@@ -37,7 +37,8 @@ if (typeof tty === "undefined") {
 // per-endpoint detail screen is open. Both are signals so the view reacts.
 const sel = signal(0);
 const focusKey = signal(null);
-const detailSel = signal(0); // which payload is expanded in the detail accordion
+const detailSel = signal(0);    // which payload is expanded in the detail accordion
+const detailScroll = signal(0); // line offset within the open payload (PgUp/Dn)
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -50,7 +51,7 @@ function enterDetail() {
   const data = rows.get();
   if (data.length === 0) return;
   const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) { detailSel.set(0); focusKey.set(keyOf(row)); }
+  if (row) { detailSel.set(0); detailScroll.set(0); focusKey.set(keyOf(row)); }
 }
 
 const exitDetail = () => focusKey.set(null);
@@ -63,7 +64,7 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} detailSel={detailSel} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} detailSel={detailSel} detailScroll={detailScroll} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
     <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
     <Legend focusKey={focusKey} />
@@ -82,14 +83,21 @@ tty.on("keydown", (e) => {
 
   if (focusKey.get()) {
     if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
-    // Move the accordion cursor between captured payloads (clamp to the count).
     const r = endpoint(focusKey.get());
     const n = r ? r.samples.length : 0;
-    const move = (d) => { if (n) detailSel.set(Math.max(0, Math.min(n - 1, detailSel.get() + d))); };
-    if (e.code === "ArrowDown" || e.key === "j") move(1);
-    else if (e.code === "ArrowUp" || e.key === "k") move(-1);
-    else if (e.code === "PageDown") move(5);
-    else if (e.code === "PageUp") move(-5);
+    // ↑/↓ (j/k) move the accordion cursor between payloads, snapping the new
+    // payload's header to the top; PgUp/Dn line-scroll within the open one.
+    const toPayload = (d) => {
+      if (!n) return;
+      const v = Math.max(0, Math.min(n - 1, detailSel.get() + d));
+      detailSel.set(v);
+      detailScroll.set(v); // header line index == payload index (others collapsed)
+    };
+    const scroll = (d) => detailScroll.set(Math.max(0, Math.min(detailView.max, detailScroll.get() + d)));
+    if (e.code === "ArrowDown" || e.key === "j") toPayload(1);
+    else if (e.code === "ArrowUp" || e.key === "k") toPayload(-1);
+    else if (e.code === "PageDown") scroll(10);
+    else if (e.code === "PageUp") scroll(-10);
     return;
   }
 
