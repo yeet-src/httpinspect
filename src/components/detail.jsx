@@ -7,8 +7,8 @@
 // `scroll`). `open` distinguishes the two screens.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
-  fmtCount, fmtBytes, fmtAgo, fmtMs, statusColor,
+  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
+  fmtCount, fmtBytes, fmtAgo, fmtMs, statusColor, latColor,
 } from "@/lib/format.js";
 
 // Vibrant JSON syntax palette.
@@ -49,12 +49,15 @@ function msgLines(text, width) {
   const sep = text.indexOf("\r\n\r\n");
   const headText = sep >= 0 ? text.slice(0, sep) : text;
   const body = sep >= 0 ? text.slice(sep + 4) : "";
-  const out = [];
+  const rule = (lbl) => [fg(label)(`── ${lbl} ` + "─".repeat(Math.max(0, width - lbl.length - 4)))];
+  const out = [rule("headers")];
   headText.split(/\r?\n/).forEach((l, j) =>
     wrapTo(l, width).forEach((c, k) => out.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
-  if (body.trim()) {
-    out.push([" "]);
-    const t = body.trim();
+  out.push([" "], rule("body"));
+  const t = body.trim();
+  if (!t) {
+    out.push([fg(muted)("(no body)")]);
+  } else {
     let src = body;
     if (t.startsWith("{") || t.startsWith("[")) {
       try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
@@ -94,30 +97,36 @@ function endpointHead(r, totals) {
 }
 
 // ---- requests table (Wireshark-style packet list) ----
-const C_IDX = 4, C_TIME = 7, C_CODE = 6, C_LAT = 9, C_SIZE = 8;
-const cell = (s, w) => `${s}`.slice(0, w).padEnd(w);
+// Width-based columns (a single padded Text gets its spaces trimmed, which
+// collapses the columns) — one Text per cell, like the endpoint list.
+const C_TIME = 9, C_CODE = 6, C_LAT = 9, C_SIZE = 8;
 
 function tableHeader() {
   return (
-    <Text height="1" break="none" overflow="hidden">
-      {fg(label)(cell("#", C_IDX) + cell("Time", C_TIME) + cell("Code", C_CODE) + cell("Latency", C_LAT) + cell("Size", C_SIZE) + "Info")}
-    </Text>
+    <Box direction="row" height="1">
+      <Text width={2}>{" "}</Text>
+      <Text width={C_TIME}>{bold(fg(accent)("Time"))}</Text>
+      <Text width={C_CODE}>{bold(fg(accent)("Code"))}</Text>
+      <Text width={C_LAT}>{bold(fg(accent)("Latency"))}</Text>
+      <Text width={C_SIZE}>{bold(fg(accent)("Size"))}</Text>
+      <Text width="1fr">{bold(fg(accent)("Info"))}</Text>
+    </Box>
   );
 }
 
-function tableRow(t, n, on, now) {
-  const code = t.status ? fg(statusColor(t.status))(cell(t.status, C_CODE))
-    : fg(muted)(cell(t.out === null ? "·" : "—", C_CODE));
-  const spans = [
-    fg(on ? accent : muted)(cell(n, C_IDX)),
-    fg(on ? accent : muted)(cell(`${fmtAgo(now - t.ts)} ago`, C_TIME)),
-    code,
-    fg(muted)(cell(t.ms != null ? fmtMs(t.ms) : "", C_LAT)),
-    fg(muted)(cell(fmtBytes((t.in?.length || 0) + (t.out?.length || 0)), C_SIZE)),
-    (t.in.split(/\r?\n/)[0] || ""),
-  ];
-  const row = <Text height="1" break="none" overflow="hidden">{spans}</Text>;
-  return on ? <Box height="1" width="1fr" bg={selBg}>{row}</Box> : row;
+function tableRow(t, on, now) {
+  const info = t.in.split(/\r?\n/)[0] || "";
+  const method = info.split(" ")[0] || "";
+  return (
+    <Box direction="row" height="1">
+      <Text width={2}>{on ? fg(accent)("▸") : " "}</Text>
+      <Text width={C_TIME}>{fg(on ? accent : muted)(`${fmtAgo(now - t.ts)} ago`)}</Text>
+      <Text width={C_CODE}>{t.status ? bold(fg(statusColor(t.status))(String(t.status))) : fg(muted)(t.out === null ? "·" : "—")}</Text>
+      <Text width={C_LAT}>{t.ms != null ? fg(latColor(t.ms))(fmtMs(t.ms)) : fg(muted)("·")}</Text>
+      <Text width={C_SIZE}>{fg(muted)(fmtBytes((t.in?.length || 0) + (t.out?.length || 0)))}</Text>
+      <Text width="1fr" overflow="ellipsis">{fg(methodColor(method))(method)}{fg(on ? accent : muted)(info.slice(method.length))}</Text>
+    </Box>
+  );
 }
 
 export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, open, txnDir, scroll }) {
@@ -145,7 +154,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
               <Text overflow="ellipsis">{fg(label)(`requests (${txns.length})`)}{fg(muted)("   ↑/↓ select · ⏎ open · esc back")}</Text>
               {txns.length === 0
                 ? <Text>{fg(muted)("no requests captured yet")}</Text>
-                : [tableHeader(), ...txns.slice(tableTop, tableTop + vis).map((t, i) => tableRow(t, tableTop + i + 1, tableTop + i === sel, now))]}
+                : [tableHeader(), ...txns.slice(tableTop, tableTop + vis).map((t, i) => tableRow(t, tableTop + i === sel, now))]}
             </Box>
           );
         }
