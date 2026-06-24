@@ -6,7 +6,7 @@
 // `focusKey`, `tick`, and the nav signals (`txnSel`, `txnDir`, `pane`, `scroll`).
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
 } from "@/lib/format.js";
 
@@ -89,22 +89,6 @@ function statusSpans(status) {
     [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
 
-// One transaction list row (left pane).
-function txnRow(t, i, sel, now) {
-  const open = i === sel;
-  const code = t.status ? fg(statusColor(t.status))(String(t.status))
-    : (t.out === null ? fg(muted)("···") : fg(muted)("—"));
-  const lat = t.ms != null ? fg(muted)(` ${fmtMs(t.ms)}`) : "";
-  const spans = [
-    open ? fg(accent)("▸ ") : "  ",
-    fg(open ? accent : muted)(`${fmtAgo(now - t.ts)} ago `.padEnd(9)),
-    code, lat,
-  ];
-  return open
-    ? <Box width="1fr" bg={selBg}><Text height="1" break="none" overflow="hidden">{spans}</Text></Box>
-    : <Text height="1" break="none" overflow="hidden">{spans}</Text>;
-}
-
 // A bordered, scrollable pane of pre-built display lines.
 function Pane({ title, lines, off, vis, focused, h }) {
   const view = lines.slice(off, off + vis);
@@ -142,13 +126,12 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
         const txn = txns[sel];
         const msg = txn ? (dir === 1 ? txn.out : txn.in) : null;
 
-        // Pane geometry (cells), derived from the terminal size.
-        const W = Math.max(16, cols - 34);
-        const rowH = Math.max(5, rows - 13);             // height shared by the panes row
-        const headersH = Math.max(3, Math.floor(rowH * 0.4));
-        const bodyH = Math.max(3, rowH - headersH);
-        const hVis = Math.max(1, headersH - 3);
-        const bVis = Math.max(1, bodyH - 3);
+        // Panes are full width and flex-fill the height below the stats; vis is
+        // estimated from the terminal size to size the scroll window.
+        const W = Math.max(24, cols - 6);
+        const avail = Math.max(6, rows - 12); // rows left for the two panes
+        const hVis = Math.max(1, Math.round(avail * 0.4) - 3); // minus border + title
+        const bVis = Math.max(1, Math.round(avail * 0.6) - 3);
 
         const { hdr, bdy } = msg
           ? msgLines(msg, W)
@@ -166,26 +149,25 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
               <Text width={W_METHOD + 1}>{bold(fg(methodColor(r.method))(r.method))}</Text>
               <Text width="1fr" overflow="ellipsis">{bold(fg(accent)(`${r.host}${r.path}`))}</Text>
             </Box>
-            <Field name="Requests">
-              {bold(fg(accent)(fmtCount(r.count)))}
-              {fg(muted)(`  ${share.toFixed(1)}%  ·  `)}
+            <Field name="Traffic">
+              {bold(fg(accent)(fmtCount(r.count)))}{fg(muted)(" reqs  ·  ")}
+              {fg(muted)(`${share.toFixed(1)}%  ·  `)}
               {r.rate > 0 ? bold(fg(rateOn)(`${r.rate}/s`)) : fg(muted)("0/s")}
-              {fg(muted)(`  peak ${r.peak}/s`)}
+              {fg(muted)(`  ·  ${fmtBytes(r.bytes)}`)}
             </Field>
             <Field name="Latency">{lat}</Field>
             <Field name="Status">{statusSpans(r.status)}</Field>
-            <Field name="Bytes">{bold(fg(label)(fmtBytes(r.bytes)))}{fg(muted)(` · last ${fmtAgo(now - r.last)} ago`)}</Field>
-            <Box direction="row" width="1fr" height={`${rowH}`} overflow="hidden">
-              <Box border={{ line: "round", fg: grid }} direction="column" width="26" height={`${rowH}`} overflow="hidden">
-                <Text overflow="ellipsis">{fg(label)(`txns (${txns.length})`)}</Text>
-                {txns.length === 0
-                  ? <Text>{fg(muted)("none yet")}</Text>
-                  : txns.map((t, i) => txnRow(t, i, sel, now))}
-              </Box>
-              <Box direction="column" width="1fr" height={`${rowH}`}>
-                <Pane title={`headers  ${dirLabel}`} lines={hdr} off={focusBody ? 0 : off} vis={hVis} focused={!focusBody} h={headersH} />
-                <Pane title="body" lines={bdy} off={focusBody ? off : 0} vis={bVis} focused={focusBody} h={bodyH} />
-              </Box>
+            <Text overflow="ellipsis">{[
+              fg(label)(`txn ${txns.length ? sel + 1 : 0}/${txns.length}`),
+              txn ? fg(muted)(`  ·  ${fmtAgo(now - txn.ts)} ago`) : "",
+              txn && txn.status ? fg(muted)("  ·  ") : "",
+              txn && txn.status ? bold(fg(statusColor(txn.status))(String(txn.status))) : "",
+              txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : "",
+              fg(muted)("    ↑/↓ txn"),
+            ]}</Text>
+            <Box direction="column" width="1fr" height="1fr" overflow="hidden">
+              <Pane title={`headers  ${dirLabel}`} lines={hdr} off={focusBody ? 0 : off} vis={hVis} focused={!focusBody} h="2fr" />
+              <Pane title="body" lines={bdy} off={focusBody ? off : 0} vis={bVis} focused={focusBody} h="3fr" />
             </Box>
           </Box>
         );
