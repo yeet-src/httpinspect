@@ -1,8 +1,9 @@
 // Detail screen: a per-endpoint breakdown for the endpoint the user pressed
-// Enter on, plus a scrollable view of the last few raw payloads captured for
-// it. Reads `focusKey` (which endpoint), `tick` (the endpoint's fields mutate
-// in place, so reading `tick` re-renders), and `bodyScroll` (the payload-view
-// scroll offset, driven by j/k in main.jsx). `endpoint()` looks the row up.
+// Enter on, plus an accordion of the last few captured payloads — each a
+// collapsible row, the selected one expanded to its full headers + JSON body.
+// Reads `focusKey` (which endpoint), `tick` (the endpoint's fields mutate in
+// place, so reading `tick` re-renders), and `detailSel` (the accordion cursor,
+// moved by ↑/↓ in main.jsx). `endpoint()` looks the row up.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
   methodColor, accent, rateOn, grid, label, muted, W_METHOD,
@@ -48,10 +49,9 @@ function headerLine(l) {
   return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
-// Largest scroll offset the payload view currently allows. The render writes it
-// each frame (plain assignment — not a signal) so main.jsx's key handler can
-// clamp bodyScroll without re-deriving the line count.
-export const scrollState = { max: 0 };
+// Window top (in display lines) for the payload accordion, kept across renders
+// so the selected (expanded) payload stays on screen as the cursor moves.
+let detailTop = 0;
 
 // Components are called `(opts, ...children)` by the JSX runtime, so read the
 // value pieces from the rest args — not a `children` prop.
@@ -75,37 +75,48 @@ function statusSpans(status) {
 const kindTag = (k) => (k === 1 ? "RESP" : "REQ ");
 const dirTag = (d) => (d === 1 ? "in" : "out");
 
-/* Flatten the captured payloads into display lines, each an array of colored
- * spans: a separator, the request/response line (bold) + headers (greyed), a
- * blank, then the JSON-formatted, syntax-colored body. One logical line per
- * Text (no hard-wrap), so the scroll offset is line-exact and long lines clip. */
-function buildBodyLines(samples, now, width) {
-  const out = [];
-  for (const s of samples) {
-    const head = `── ${kindTag(s.kind)} ${dirTag(s.dir)} · ${fmtAgo(now - s.ts)} ago `;
-    out.push([fg(label)(head + "─".repeat(Math.max(0, width - head.length)))]);
+/* The payload accordion as display lines (each an array of colored spans).
+ * Every captured payload is a one-line collapsible header (▸) showing its
+ * kind/age and a snippet of the request/response line; the selected one (▾)
+ * expands to its full headers + JSON-formatted, syntax-colored body, indented.
+ * Returns the lines plus the selected header's line index so the view can keep
+ * it on screen. */
+function accordionLines(samples, sel, now, width) {
+  const lines = [];
+  let selLine = 0;
+  samples.forEach((s, i) => {
+    const open = i === sel;
+    if (open) selLine = lines.length;
+    const head = `${open ? "▾" : "▸"} ${kindTag(s.kind)} ${dirTag(s.dir)} · ${fmtAgo(now - s.ts)} ago  `;
+    const snippet = (s.text.split(/\r?\n/)[0] || "").slice(0, Math.max(0, width - head.length));
+    lines.push(open
+      ? [bold(fg(accent)(head)), bold(snippet)]
+      : [fg(muted)(head), fg(muted)(snippet)]);
+    if (!open) return;
     const sep = s.text.indexOf("\r\n\r\n");
     const headText = sep >= 0 ? s.text.slice(0, sep) : s.text;
     const body = sep >= 0 ? s.text.slice(sep + 4) : "";
-    headText.split(/\r?\n/).forEach((l, i) => out.push(i === 0 ? [bold(l)] : headerLine(l)));
+    lines.push([" "]);
+    headText.split(/\r?\n/).forEach((l, j) =>
+      lines.push(j === 0 ? [fg(muted)("  "), bold(l)] : [fg(muted)("  "), ...headerLine(l)]));
     if (body.trim()) {
-      out.push([" "]);
-      for (const bl of bodyLines(body)) out.push(bl);
+      lines.push([" "]);
+      for (const bl of bodyLines(body)) lines.push([fg(muted)("  "), ...bl]);
     }
-    out.push([" "]);
-  }
-  return out;
+    lines.push([" "]);
+  });
+  return { lines, selLine };
 }
 
-export default function DetailPanel({ focusKey, tick, endpoint, totals, size, bodyScroll }) {
+export default function DetailPanel({ focusKey, tick, endpoint, totals, size, detailSel }) {
   return (
     <Box border={{ line: "round", fg: grid }} padding={1} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       {() => {
         tick.get();        // re-render on each state tick (fields mutate in place)
-        bodyScroll.get();  // and on scroll
+        detailSel.get();   // and when the accordion cursor moves
         const r = endpoint(focusKey.get());
-        if (!r) { scrollState.max = 0; return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>; }
+        if (!r) return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>;
         const now = Date.now();
         const share = totals.reqs ? (r.count / totals.reqs) * 100 : 0;
         const lat = r.lat.length
@@ -115,11 +126,13 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, bo
 
         const { cols, rows } = size.get();
         const width = Math.max(20, cols - 4);
-        const lines = buildBodyLines(r.samples, now, width);
+        const sel = Math.min(Math.max(0, detailSel.get()), Math.max(0, r.samples.length - 1));
+        const { lines, selLine } = accordionLines(r.samples, sel, now, width);
         const vis = Math.max(3, rows - 15); // leave room for the stats block + chrome
-        scrollState.max = Math.max(0, lines.length - vis);
-        const off = Math.min(Math.max(0, bodyScroll.get()), scrollState.max);
-        const view = lines.slice(off, off + vis);
+        if (selLine < detailTop) detailTop = selLine;
+        else if (selLine >= detailTop + vis) detailTop = selLine - vis + 1;
+        detailTop = Math.max(0, Math.min(detailTop, Math.max(0, lines.length - vis)));
+        const view = lines.slice(detailTop, detailTop + vis);
 
         return (
           <Box direction="column" width="1fr" height="1fr">
@@ -138,8 +151,8 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, bo
             <Field name="Bytes">{bold(fg(label)(fmtBytes(r.bytes)))}{fg(muted)(` · first ${fmtAgo(now - r.first)} ago · last ${fmtAgo(now - r.last)} ago`)}</Field>
             <Text> </Text>
             <Text overflow="ellipsis">
-              {fg(label)(`Recent payloads (${r.samples.length})  ·  j/k scroll`)}
-              {scrollState.max > 0 ? fg(muted)(`  ·  ${off}/${scrollState.max}`) : ""}
+              {fg(label)(`Payloads (${r.samples.length})`)}
+              {r.samples.length ? fg(muted)(`  ·  ↑/↓ browse  ·  ${sel + 1}/${r.samples.length}`) : ""}
             </Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {r.samples.length === 0

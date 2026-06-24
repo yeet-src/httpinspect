@@ -78,7 +78,6 @@ export default function ListPanel({ rows, sel, size }) {
           return <Text>{fg(muted)("waiting for HTTP requests…  (try: curl http://localhost:PORT/path)")}</Text>;
         }
         const cur = Math.max(0, Math.min(data.length - 1, sel.get()));
-        // Keep the selection inside the visible window [listTop, listTop+vis).
         if (cur < listTop) listTop = cur;
         else if (cur >= listTop + vis) listTop = cur - vis + 1;
         listTop = Math.max(0, Math.min(listTop, Math.max(0, data.length - vis)));

@@ -7,7 +7,7 @@ export default function Legend({ focusKey }) {
   return (
     <Text>{() => {
       const keys = focusKey.get()
-        ? [["j/k", "scroll"], ["esc / ←", "back"], ["q", "list"], ["Ctrl-C", "quit"]]
+        ? [["↑/↓", "browse"], ["esc / ←", "back"], ["q", "list"], ["Ctrl-C", "quit"]]
         : [["↑/↓", "move"], ["PgUp/Dn", "page"], ["⏎", "details"], ["q / Ctrl-C", "quit"]];
       return keys.flatMap(([k, d], i) => [i ? fg(muted)("    ") : "", bold(fg(accent)(k)), fg(muted)(" " + d)]);
     }}</Text>
