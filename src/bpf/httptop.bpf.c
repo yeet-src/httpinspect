@@ -30,7 +30,7 @@
 
 #define TCX_NEXT (-1)          /* passive observer: run next prog / default-pass */
 
-#define DATA_MAX 512           /* must be a power of two (see mask below) */
+#define DATA_MAX 4096          /* must be a power of two (see mask below) */
 #define MIN_REQ  16            /* "GET / HTTP/1.1\r\n" is already 16 bytes */
 
 #define DIR_EGRESS  0
@@ -38,8 +38,6 @@
 
 #define KIND_REQUEST  0
 #define KIND_RESPONSE 1
-
-#define RESP_CAP 32            /* responses: only the status line is parsed */
 
 struct http_event {
     __u64 ts;           /* bpf_ktime_get_ns() at capture (monotonic) */
@@ -59,7 +57,7 @@ __attribute__((used)) static const struct http_event __http_event_anchor;
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 8 << 20);
+    __uint(max_entries, 16 << 20);   /* larger events (4 KiB) → more headroom */
 } events SEC(".maps");
 
 /* Does the 8-byte prefix begin with an HTTP method token (method + space)? */
@@ -157,12 +155,12 @@ static __always_inline int handle(struct __sk_buff *skb, __u8 dir)
     else if (is_http_response(m)) kind = KIND_RESPONSE;
     else                          return TCX_NEXT;
 
-    /* Requests carry the line + Host header (parsed in JS); responses only need
-       the status line, so cap them short to spare ringbuf bandwidth. */
+    /* Copy the captured prefix of this first segment — request/response line,
+       headers, and as much body as fits — so JS can parse the line and the
+       inspect pane can show the (JSON) body. */
     __u32 cap = plen;
-    __u32 limit = kind == KIND_RESPONSE ? RESP_CAP : (DATA_MAX - 1);
-    if (cap > limit)
-        cap = limit;
+    if (cap > DATA_MAX - 1)
+        cap = DATA_MAX - 1;
     cap &= (DATA_MAX - 1);                   /* make the bound explicit for the verifier */
     if (cap == 0)
         return TCX_NEXT;

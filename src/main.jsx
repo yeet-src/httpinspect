@@ -18,7 +18,7 @@ import { ifaceLabel } from "@/probes/probe.js";
 import { rows, totals, tick, endpoint, endpointCount, keyOf } from "@/probes/httptop.js";
 import StatusBar from "@/components/statusbar.jsx";
 import ListPanel from "@/components/list.jsx";
-import DetailPanel from "@/components/detail.jsx";
+import DetailPanel, { scrollState } from "@/components/detail.jsx";
 import Footer from "@/components/footer.jsx";
 import Legend from "@/components/legend.jsx";
 
@@ -37,6 +37,7 @@ if (typeof tty === "undefined") {
 // per-endpoint detail screen is open. Both are signals so the view reacts.
 const sel = signal(0);
 const focusKey = signal(null);
+const bodyScroll = signal(0); // payload-view scroll offset on the detail screen
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -49,7 +50,7 @@ function enterDetail() {
   const data = rows.get();
   if (data.length === 0) return;
   const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) focusKey.set(keyOf(row));
+  if (row) { bodyScroll.set(0); focusKey.set(keyOf(row)); }
 }
 
 const exitDetail = () => focusKey.set(null);
@@ -62,9 +63,9 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} bodyScroll={bodyScroll} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
-    <Footer totals={totals} endpointCount={endpointCount} />
+    <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
     <Legend focusKey={focusKey} />
   </Box>
 );
@@ -80,7 +81,13 @@ tty.on("keydown", (e) => {
   if (e.ctrlKey && e.code === "c") { yeet.exit(); return; }
 
   if (focusKey.get()) {
-    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") exitDetail();
+    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
+    // Scroll the payload view; clamp against the max the detail render published.
+    const set = (n) => bodyScroll.set(Math.max(0, Math.min(scrollState.max, n)));
+    if (e.code === "ArrowDown" || e.key === "j") set(bodyScroll.get() + 1);
+    else if (e.code === "ArrowUp" || e.key === "k") set(bodyScroll.get() - 1);
+    else if (e.code === "PageDown" || e.code === "Space") set(bodyScroll.get() + 10);
+    else if (e.code === "PageUp") set(bodyScroll.get() - 10);
     return;
   }
 
