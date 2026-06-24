@@ -37,10 +37,10 @@ if (typeof tty === "undefined") {
 // per-endpoint detail screen is open. Both are signals so the view reacts.
 const sel = signal(0);
 const focusKey = signal(null);
-const txnSel = signal(0);  // selected transaction in the detail inspector
-const txnDir = signal(0);  // 0 = in (request), 1 = out (response)
-const pane = signal(1);    // focused detail pane: 0 = headers, 1 = body
-const scroll = signal(0);  // line offset of the focused detail pane
+const txnSel = signal(0);    // selected request in the detail requests table
+const open = signal(false);  // false = requests table, true = body view
+const txnDir = signal(0);    // 0 = in (request), 1 = out (response)
+const scroll = signal(0);    // line offset of the body view
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -53,7 +53,7 @@ function enterDetail() {
   const data = rows.get();
   if (data.length === 0) return;
   const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) { txnSel.set(0); txnDir.set(0); pane.set(1); scroll.set(0); focusKey.set(keyOf(row)); }
+  if (row) { txnSel.set(0); txnDir.set(0); open.set(false); scroll.set(0); focusKey.set(keyOf(row)); }
 }
 
 const exitDetail = () => focusKey.set(null);
@@ -66,10 +66,10 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} txnDir={txnDir} pane={pane} scroll={scroll} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} open={open} txnDir={txnDir} scroll={scroll} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
     <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
-    <Legend focusKey={focusKey} />
+    <Legend focusKey={focusKey} open={open} />
   </Box>
 );
 
@@ -84,19 +84,27 @@ tty.on("keydown", (e) => {
   if (e.ctrlKey && e.code === "c") { yeet.exit(); return; }
 
   if (focusKey.get()) {
-    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
     const r = endpoint(focusKey.get());
     const n = r ? r.txns.length : 0;
-    // ↑/↓ (j/k) pick a transaction; > / l show the in (request), < / h the out
-    // (response); tab moves focus between the headers and body panes; PgUp/Dn
-    // scroll the focused pane. Any of these resets the pane scroll.
-    if (e.code === "ArrowDown" || e.key === "j") { if (n) { txnSel.set(Math.min(n - 1, txnSel.get() + 1)); scroll.set(0); } }
-    else if (e.code === "ArrowUp" || e.key === "k") { if (n) { txnSel.set(Math.max(0, txnSel.get() - 1)); scroll.set(0); } }
+    if (!open.get()) {
+      // requests table: ↑/↓ select, ⏎/→ open the body view, esc back to list.
+      if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
+      if (e.code === "ArrowDown" || e.key === "j") { if (n) txnSel.set(Math.min(n - 1, txnSel.get() + 1)); }
+      else if (e.code === "ArrowUp" || e.key === "k") { if (n) txnSel.set(Math.max(0, txnSel.get() - 1)); }
+      else if (e.code === "PageDown") { if (n) txnSel.set(Math.min(n - 1, txnSel.get() + 10)); }
+      else if (e.code === "PageUp") { if (n) txnSel.set(Math.max(0, txnSel.get() - 10)); }
+      else if (e.code === "Enter" || e.code === "ArrowRight") { if (n) { open.set(true); txnDir.set(0); scroll.set(0); } }
+      return;
+    }
+    // body view: < / > flip in/out, ↑/↓ + PgUp/Dn scroll, esc back to the table.
+    const scrollBy = (d) => scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + d)));
+    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { open.set(false); return; }
     else if (e.key === ">" || e.key === "l") { txnDir.set(0); scroll.set(0); }
     else if (e.key === "<" || e.key === "h") { txnDir.set(1); scroll.set(0); }
-    else if (e.code === "Tab") { pane.set(pane.get() === 1 ? 0 : 1); scroll.set(0); }
-    else if (e.code === "PageDown") scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + 10)));
-    else if (e.code === "PageUp") scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() - 10)));
+    else if (e.code === "ArrowDown" || e.key === "j") scrollBy(1);
+    else if (e.code === "ArrowUp" || e.key === "k") scrollBy(-1);
+    else if (e.code === "PageDown") scrollBy(10);
+    else if (e.code === "PageUp") scrollBy(-10);
     return;
   }
 

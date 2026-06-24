@@ -35,7 +35,7 @@ export const tick = signal(0);
 
 export const HIST_LEN = 60;  /* req/s samples kept per endpoint (≈1 min) */
 export const LAT_LEN = 200;  /* recent response latencies kept (ms) */
-export const TXN_MAX = 8;    /* recent transactions kept per endpoint (inspect pane) */
+export const TXN_MAX = 50;   /* recent transactions kept per endpoint (inspect pane) */
 
 /* ---- parsing ------------------------------------------------------ */
 function bytesToLatin1(bytes, max) {

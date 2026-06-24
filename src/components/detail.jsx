@@ -1,17 +1,17 @@
-// Detail screen: a per-endpoint breakdown plus a three-pane transaction
-// inspector — a list of captured transactions (left), and the selected one's
-// headers (top-right) and body (bottom-right) in their own scrollable panes.
-// `<`/`>` flip between the request (in) and response (out); `tab` moves focus
-// between the headers/body panes; PgUp/Dn scroll the focused pane. Reads
-// `focusKey`, `tick`, and the nav signals (`txnSel`, `txnDir`, `pane`, `scroll`).
+// Detail: a two-screen drill for one endpoint.
+//   • requests table — a Wireshark-style list of the endpoint's recent calls
+//     (one row each: #, age, status, latency, size). ↑/↓ select, ⏎ to open.
+//   • body view — the opened request's headers + body, scrollable, with `<`/`>`
+//     flipping the in (request) / out (response). esc steps back out.
+// Reads `focusKey`, `tick`, and the nav signals (`txnSel`, `open`, `txnDir`,
+// `scroll`). `open` distinguishes the two screens.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
-  fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
+  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
+  fmtCount, fmtBytes, fmtAgo, fmtMs, statusColor,
 } from "@/lib/format.js";
 
-// Vibrant JSON syntax palette (keys cyan, strings yellow, numbers purple,
-// literals pink; punctuation uses the shared muted indigo).
+// Vibrant JSON syntax palette.
 const J_KEY = rgb(0x8be9fd), J_STR = rgb(0xf1fa8c), J_NUM = rgb(0xbd93f9), J_LIT = rgb(0xff79c6);
 
 const JSON_TOK = /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|(-?\d+\.?\d*(?:[eE][+-]?\d+)?)|(true|false|null)|([{}\[\],])/g;
@@ -31,7 +31,6 @@ function colorJsonLine(line) {
   return spans.length ? spans : [line];
 }
 
-// Hard-wrap a string into <=width chunks so long values don't clip off-screen.
 function wrapTo(line, width) {
   if (line.length <= width) return [line];
   const out = [];
@@ -39,135 +38,140 @@ function wrapTo(line, width) {
   return out;
 }
 
-// "Name:" in pink, value plain.
 function headerLine(l) {
   const i = l.indexOf(":");
   return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
-// Split a captured message into wrapped+colored header lines and body lines.
+// A captured message → wrapped+colored display lines: request/response line
+// (bold), headers, a blank, then the JSON-formatted, colored body.
 function msgLines(text, width) {
   const sep = text.indexOf("\r\n\r\n");
   const headText = sep >= 0 ? text.slice(0, sep) : text;
   const body = sep >= 0 ? text.slice(sep + 4) : "";
-  const hdr = [];
+  const out = [];
   headText.split(/\r?\n/).forEach((l, j) =>
-    wrapTo(l, width).forEach((c, k) => hdr.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
-  let bdy;
-  if (!body.trim()) {
-    bdy = [[fg(muted)("(no body)")]];
-  } else {
+    wrapTo(l, width).forEach((c, k) => out.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
+  if (body.trim()) {
+    out.push([" "]);
     const t = body.trim();
     let src = body;
     if (t.startsWith("{") || t.startsWith("[")) {
       try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
     }
-    bdy = [];
-    for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) bdy.push(colorJsonLine(c));
+    for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) out.push(colorJsonLine(c));
   }
-  return { hdr, bdy };
+  return out;
 }
 
-// Max scroll offset of the focused pane, published each render so main.jsx can
-// clamp PgUp/PgDn without re-deriving line counts.
+// Max scroll offset of the body view, published each render for main.jsx.
 export const detailView = { max: 0 };
-
-// Components are called `(opts, ...children)` by the JSX runtime.
-function Field(opts, ...children) {
-  return (
-    <Box direction="row" height="fit">
-      <Text width={11}>{fg(label)(opts.name)}</Text>
-      <Text width="1fr" overflow="ellipsis">{children.flat(Infinity)}</Text>
-    </Box>
-  );
-}
+// Top row of the requests-table window, kept across renders.
+let tableTop = 0;
 
 function statusSpans(status) {
   const codes = Object.entries(status).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (codes.length === 0) return fg(muted)("— none paired");
+  if (codes.length === 0) return fg(muted)("none paired");
   return codes.flatMap(([code, n], i) =>
     [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
 
-// A bordered, scrollable pane of pre-built display lines.
-function Pane({ title, lines, off, vis, focused, h }) {
-  const view = lines.slice(off, off + vis);
+// Endpoint header shown on both screens.
+function endpointHead(r, totals) {
+  const share = totals.reqs ? (r.count / totals.reqs) * 100 : 0;
+  return [
+    <Box direction="row" height="fit">
+      <Text width={W_METHOD + 1}>{bold(fg(methodColor(r.method))(r.method))}</Text>
+      <Text width="1fr" overflow="ellipsis">{bold(fg(accent)(`${r.host}${r.path}`))}</Text>
+    </Box>,
+    <Text overflow="ellipsis">{[
+      bold(fg(accent)(fmtCount(r.count))), fg(muted)(" reqs  ·  "),
+      fg(muted)(`${share.toFixed(1)}%  ·  `),
+      r.rate > 0 ? bold(fg(rateOn)(`${r.rate}/s`)) : fg(muted)("0/s"),
+      fg(muted)("  ·  "), ...[].concat(statusSpans(r.status)),
+    ]}</Text>,
+  ];
+}
+
+// ---- requests table (Wireshark-style packet list) ----
+const C_IDX = 4, C_TIME = 7, C_CODE = 6, C_LAT = 9, C_SIZE = 8;
+const cell = (s, w) => `${s}`.slice(0, w).padEnd(w);
+
+function tableHeader() {
   return (
-    <Box border={{ line: "round", fg: focused ? accent : grid }} direction="column"
-      width="1fr" height={`${h}`} overflow="hidden">
-      <Text overflow="ellipsis">
-        {fg(focused ? accent : label)(title)}
-        {lines.length > vis ? fg(muted)(`  ${off + 1}-${Math.min(off + vis, lines.length)}/${lines.length}`) : ""}
-      </Text>
-      {view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
-    </Box>
+    <Text height="1" break="none" overflow="hidden">
+      {fg(label)(cell("#", C_IDX) + cell("Time", C_TIME) + cell("Code", C_CODE) + cell("Latency", C_LAT) + cell("Size", C_SIZE) + "Info")}
+    </Text>
   );
 }
 
-export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, txnDir, pane, scroll }) {
+function tableRow(t, n, on, now) {
+  const code = t.status ? fg(statusColor(t.status))(cell(t.status, C_CODE))
+    : fg(muted)(cell(t.out === null ? "·" : "—", C_CODE));
+  const spans = [
+    fg(on ? accent : muted)(cell(n, C_IDX)),
+    fg(on ? accent : muted)(cell(`${fmtAgo(now - t.ts)} ago`, C_TIME)),
+    code,
+    fg(muted)(cell(t.ms != null ? fmtMs(t.ms) : "", C_LAT)),
+    fg(muted)(cell(fmtBytes((t.in?.length || 0) + (t.out?.length || 0)), C_SIZE)),
+    (t.in.split(/\r?\n/)[0] || ""),
+  ];
+  const row = <Text height="1" break="none" overflow="hidden">{spans}</Text>;
+  return on ? <Box height="1" width="1fr" bg={selBg}>{row}</Box> : row;
+}
+
+export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, open, txnDir, scroll }) {
   return (
     <Box border={{ line: "round", fg: grid }} padding={1} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       {() => {
-        tick.get(); txnSel.get(); txnDir.get(); pane.get(); scroll.get();
+        tick.get(); txnSel.get(); open.get(); txnDir.get(); scroll.get();
         const r = endpoint(focusKey.get());
         if (!r) return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>;
         const now = Date.now();
-        const share = totals.reqs ? (r.count / totals.reqs) * 100 : 0;
-        const lat = r.lat.length
-          ? `p50 ${fmtMs(percentile(r.lat, 50))} · p95 ${fmtMs(percentile(r.lat, 95))} · ` +
-            `p99 ${fmtMs(percentile(r.lat, 99))} · max ${fmtMs(Math.max(...r.lat))}`
-          : fg(muted)("no responses paired yet");
-
-        const { cols, rows } = size.get();
+        const { rows, cols } = size.get();
         const txns = r.txns;
         const sel = Math.min(Math.max(0, txnSel.get()), Math.max(0, txns.length - 1));
-        const dir = txnDir.get(); // 0 = in (request), 1 = out (response)
+
+        if (!open.get()) {
+          // ── requests table ──
+          const vis = Math.max(3, rows - 9);
+          if (sel < tableTop) tableTop = sel;
+          else if (sel >= tableTop + vis) tableTop = sel - vis + 1;
+          tableTop = Math.max(0, Math.min(tableTop, Math.max(0, txns.length - vis)));
+          return (
+            <Box direction="column" width="1fr" height="1fr">
+              {endpointHead(r, totals)}
+              <Text overflow="ellipsis">{fg(label)(`requests (${txns.length})`)}{fg(muted)("   ↑/↓ select · ⏎ open · esc back")}</Text>
+              {txns.length === 0
+                ? <Text>{fg(muted)("no requests captured yet")}</Text>
+                : [tableHeader(), ...txns.slice(tableTop, tableTop + vis).map((t, i) => tableRow(t, tableTop + i + 1, tableTop + i === sel, now))]}
+            </Box>
+          );
+        }
+
+        // ── body view ──
         const txn = txns[sel];
+        const dir = txnDir.get(); // 0 = in (request), 1 = out (response)
         const msg = txn ? (dir === 1 ? txn.out : txn.in) : null;
-
-        // Panes are full width and flex-fill the height below the stats; vis is
-        // estimated from the terminal size to size the scroll window.
         const W = Math.max(24, cols - 6);
-        const avail = Math.max(6, rows - 12); // rows left for the two panes
-        const hVis = Math.max(1, Math.round(avail * 0.4) - 3); // minus border + title
-        const bVis = Math.max(1, Math.round(avail * 0.6) - 3);
-
-        const { hdr, bdy } = msg
-          ? msgLines(msg, W)
-          : { hdr: [[fg(muted)(dir === 1 ? "no response captured" : "no request captured")]], bdy: [[fg(muted)("—")]] };
-
-        const focusBody = pane.get() === 1;
-        const maxFor = focusBody ? Math.max(0, bdy.length - bVis) : Math.max(0, hdr.length - hVis);
-        detailView.max = maxFor;
-        const off = Math.min(Math.max(0, scroll.get()), maxFor);
+        const lines = msg ? msgLines(msg, W)
+          : [[fg(muted)(dir === 1 ? "no response captured (egress not seen)" : "no request captured")]];
+        const vis = Math.max(3, rows - 8);
+        detailView.max = Math.max(0, lines.length - vis);
+        const off = Math.min(Math.max(0, scroll.get()), detailView.max);
         const dirLabel = dir === 1 ? "<< out (response)" : ">> in (request)";
-
         return (
           <Box direction="column" width="1fr" height="1fr">
-            <Box direction="row" height="fit">
-              <Text width={W_METHOD + 1}>{bold(fg(methodColor(r.method))(r.method))}</Text>
-              <Text width="1fr" overflow="ellipsis">{bold(fg(accent)(`${r.host}${r.path}`))}</Text>
-            </Box>
-            <Field name="Traffic">
-              {bold(fg(accent)(fmtCount(r.count)))}{fg(muted)(" reqs  ·  ")}
-              {fg(muted)(`${share.toFixed(1)}%  ·  `)}
-              {r.rate > 0 ? bold(fg(rateOn)(`${r.rate}/s`)) : fg(muted)("0/s")}
-              {fg(muted)(`  ·  ${fmtBytes(r.bytes)}`)}
-            </Field>
-            <Field name="Latency">{lat}</Field>
-            <Field name="Status">{statusSpans(r.status)}</Field>
-            <Text overflow="ellipsis">{[
-              fg(label)(`txn ${txns.length ? sel + 1 : 0}/${txns.length}`),
-              txn ? fg(muted)(`  ·  ${fmtAgo(now - txn.ts)} ago`) : "",
-              txn && txn.status ? fg(muted)("  ·  ") : "",
-              txn && txn.status ? bold(fg(statusColor(txn.status))(String(txn.status))) : "",
-              txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : "",
-              fg(muted)("    ↑/↓ txn"),
-            ]}</Text>
+            {endpointHead(r, totals)}
+            <Text overflow="ellipsis">
+              {fg(label)(`req ${txns.length ? sel + 1 : 0}/${txns.length}  ·  ${dirLabel}`)}
+              {txn && txn.status ? [fg(muted)("  ·  "), bold(fg(statusColor(txn.status))(String(txn.status)))] : ""}
+              {txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : ""}
+              {fg(muted)("   < > in/out · ↑/↓ scroll · esc back")}
+            </Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
-              <Pane title={`headers  ${dirLabel}`} lines={hdr} off={focusBody ? 0 : off} vis={hVis} focused={!focusBody} h="2fr" />
-              <Pane title="body" lines={bdy} off={focusBody ? off : 0} vis={bVis} focused={focusBody} h="3fr" />
+              {lines.slice(off, off + vis).map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>
           </Box>
         );
