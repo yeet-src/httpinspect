@@ -10,8 +10,7 @@
 // `rows`, so a from() over `rows` would tear the ring buffer down whenever
 // detail is open. A daemon-style always-on feed is the right shape here.
 import { signal } from "yeet:tui";
-import { RingBuf } from "yeet:bpf";
-import { control } from "@/probes/probe.js";
+import { subscribe } from "@/probes/probe.js";
 import { fmtCount } from "@/lib/format.js";
 
 export const TICK_MS = 400; /* redraw cadence between per-second rate samples */
@@ -36,6 +35,7 @@ export const tick = signal(0);
 
 export const HIST_LEN = 60;  /* req/s samples kept per endpoint (≈1 min) */
 export const LAT_LEN = 200;  /* recent response latencies kept (ms) */
+export const SAMPLE_MAX = 8; /* recent raw payloads kept per endpoint (inspect pane) */
 
 /* ---- parsing ------------------------------------------------------ */
 function bytesToLatin1(bytes, max) {
@@ -115,6 +115,15 @@ function isDuplicate(ev, now) {
 const pending = new Map(); // flowKey -> [entry, …]
 const flowKey = (ev) => `${ev.family}:${Math.min(ev.sport, ev.dport)}-${Math.max(ev.sport, ev.dport)}`;
 
+/* Keep the last few raw captured payloads (request/response line + headers +
+ * whatever body fit in the first segment) per endpoint, newest first, so the
+ * inspect pane can scroll through them. */
+function pushSample(row, ev, data, now) {
+  const text = bytesToLatin1(data.subarray(0, Number(ev.captured)), Number(ev.captured));
+  row.samples.unshift({ ts: now, kind: ev.kind, dir: ev.dir, text });
+  if (row.samples.length > SAMPLE_MAX) row.samples.pop();
+}
+
 /* one ring-buffer event (an `http_event`, wrapped under its btf_struct name) */
 function onEvent(raw) {
   const ev = raw.http_event ?? raw;
@@ -137,7 +146,7 @@ function onRequest(ev, data, now) {
   let row = stats.get(key);
   if (!row) {
     row = { ...req, count: 0, prev: 0, rate: 0, peak: 0, bytes: 0,
-            first: now, last: now, hist: [], lat: [], status: {}, lastMs: null };
+            first: now, last: now, hist: [], lat: [], status: {}, lastMs: null, samples: [] };
     stats.set(key, row);
   }
   const len = Number(ev.total_len);
@@ -146,6 +155,7 @@ function onRequest(ev, data, now) {
   row.bytes += len;
   totals.reqs++;
   totals.bytes += len;
+  pushSample(row, ev, data, now);
 
   // Queue this request so the matching response can measure its latency.
   const f = flowKey(ev);
@@ -163,6 +173,7 @@ function onResponse(ev, data, now) {
 
   const row = stats.get(key);
   if (!row) return;
+  pushSample(row, ev, data, now);
 
   const ms = Math.max(0, (Number(ev.ts) - reqTs) / 1e6); // monotonic ns → ms
   row.lat.push(ms);
@@ -210,9 +221,10 @@ function sampleRates() {
   }
 }
 
-// Start the feed. The ring buffer is single-consumer and ingestion is
-// always-on (see the module header), so wire it up at load time.
-new RingBuf(control, "events").subscribe(
+// Start the feed. probe.js fans every netns ring buffer (host + each ECS task)
+// into one consumer, and ingestion is always-on (see the module header), so
+// register at load time.
+subscribe(
   onEvent,
   (err) => console.error("[httptop] ringbuf error:", err.message),
 );
