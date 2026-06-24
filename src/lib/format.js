@@ -1,22 +1,23 @@
 // Pure presentation helpers — strings, color, and the table's column widths.
 // No signals or BPF, so it's safe to import anywhere; the components reach it
 // through the `@/` alias (resolved at bundle time).
-import { rgb, idx } from "yeet:tui";
+import { rgb } from "yeet:tui";
 
-/* Per-method accent colors; unknown methods fall back to plain grey. */
+/* Per-method accent colors — all vibrant, no greys. */
 export const METHOD_COLORS = {
-  GET: rgb(0x4ec9b0), POST: rgb(0xdcdcaa), PUT: rgb(0x9cdcfe),
-  PATCH: rgb(0xc586c0), DELETE: rgb(0xf48771), HEAD: rgb(0x808080),
-  OPTIONS: rgb(0x808080), CONNECT: rgb(0x808080), TRACE: rgb(0x808080),
+  GET: rgb(0x50fa7b), POST: rgb(0xf1fa8c), PUT: rgb(0x8be9fd),
+  PATCH: rgb(0xbd93f9), DELETE: rgb(0xff5555), HEAD: rgb(0xff79c6),
+  OPTIONS: rgb(0xffb86c), CONNECT: rgb(0x80ffea), TRACE: rgb(0xd6acff),
 };
-export const METHOD_FALLBACK = idx(7);
+export const METHOD_FALLBACK = rgb(0xbd93f9);
 export const methodColor = (m) => METHOD_COLORS[m] || METHOD_FALLBACK;
 
-export const accent = rgb(0x4fc1ff); /* httptop brand + count column */
-export const rateOn = rgb(0x4ec9b0); /* a live (>0) req/s value */
-export const grid = idx(8);          /* table border */
-export const selBg = idx(236);       /* highlighted row in the list */
-export const label = idx(244);       /* detail-screen field labels */
+export const accent = rgb(0x8be9fd); /* cyan: brand, counts, selection */
+export const rateOn = rgb(0x50fa7b); /* green: a live (>0) req/s value */
+export const muted  = rgb(0x8b9bf5); /* soft indigo: secondary text (replaces dim) */
+export const grid   = rgb(0x6d5dfc); /* indigo: table border + dividers */
+export const selBg  = rgb(0x352b5e); /* deep violet: highlighted row */
+export const label  = rgb(0xff79c6); /* pink: field labels / header names */
 
 /* Fixed column widths (cells); PATH takes the remaining 1fr. HOST is flexible:
  * at least 20 cells, ~30% of the row, capped at 64 — so long FQDN:port hosts
@@ -73,10 +74,10 @@ export function fmtMs(ms) {
 
 /* HTTP status code -> color by class (2xx green, 3xx blue, 4xx yellow, 5xx red). */
 export function statusColor(code) {
-  if (code >= 500) return rgb(0xf48771);
-  if (code >= 400) return rgb(0xdcdcaa);
-  if (code >= 300) return rgb(0x9cdcfe);
-  if (code >= 200) return rgb(0x4ec9b0);
+  if (code >= 500) return rgb(0xff5555);
+  if (code >= 400) return rgb(0xf1fa8c);
+  if (code >= 300) return rgb(0x8be9fd);
+  if (code >= 200) return rgb(0x50fa7b);
   return METHOD_FALLBACK;
 }
 
@@ -95,7 +96,7 @@ export function statusClasses(status) {
 const lerp = (a, b, t) => Math.round(a + (b - a) * t);
 export function latColor(ms) {
   const t = Math.max(0, Math.min(1, ms / 500));
-  const white = [0xff, 0xff, 0xff], red = [0xf4, 0x87, 0x71];
+  const white = [0xff, 0xff, 0xff], red = [0xff, 0x55, 0x55];
   return rgb(lerp(white[0], red[0], t), lerp(white[1], red[1], t), lerp(white[2], red[2], t));
 }
 

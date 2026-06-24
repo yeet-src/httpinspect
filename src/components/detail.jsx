@@ -3,15 +3,15 @@
 // it. Reads `focusKey` (which endpoint), `tick` (the endpoint's fields mutate
 // in place, so reading `tick` re-renders), and `bodyScroll` (the payload-view
 // scroll offset, driven by j/k in main.jsx). `endpoint()` looks the row up.
-import { Box, Text, bold, dim, fg, rgb, idx } from "yeet:tui";
+import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
 } from "@/lib/format.js";
 
-// JSON syntax palette + a header-name grey.
-const J_KEY = rgb(0x9cdcfe), J_STR = rgb(0xce9178), J_NUM = rgb(0xb5cea8),
-  J_LIT = rgb(0x569cd6), J_PUNCT = idx(244), HDR = idx(244);
+// Vibrant JSON syntax palette (keys cyan, strings yellow, numbers purple,
+// literals pink; punctuation uses the shared muted indigo).
+const J_KEY = rgb(0x8be9fd), J_STR = rgb(0xf1fa8c), J_NUM = rgb(0xbd93f9), J_LIT = rgb(0xff79c6);
 
 // Split one JSON line into colored spans (keys, strings, numbers, literals,
 // punctuation). Tolerant: runs on raw text too, so truncated bodies still color.
@@ -25,7 +25,7 @@ function colorJsonLine(line) {
     else if (m[2]) spans.push(fg(J_STR)(m[2]));
     else if (m[3]) spans.push(fg(J_NUM)(m[3]));
     else if (m[4]) spans.push(fg(J_LIT)(m[4]));
-    else spans.push(fg(J_PUNCT)(m[5]));
+    else spans.push(fg(muted)(m[5]));
     last = JSON_TOK.lastIndex;
   }
   if (last < line.length) spans.push(line.slice(last));
@@ -42,10 +42,10 @@ function bodyLines(body) {
   return pretty.split(/\r?\n/).map(colorJsonLine);
 }
 
-// One captured header line → "Name:" greyed, value plain.
+// One captured header line → "Name:" in pink, value plain.
 function headerLine(l) {
   const i = l.indexOf(":");
-  return i < 0 ? [dim(l)] : [fg(HDR)(l.slice(0, i + 1)), l.slice(i + 1)];
+  return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
 // Largest scroll offset the payload view currently allows. The render writes it
@@ -67,9 +67,9 @@ function Field(opts, ...children) {
 /* Status-code tallies as colored "200×120  404×3" spans, busiest first. */
 function statusSpans(status) {
   const codes = Object.entries(status).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (codes.length === 0) return dim("— no responses paired yet");
+  if (codes.length === 0) return fg(muted)("— no responses paired yet");
   return codes.flatMap(([code, n], i) =>
-    [i ? "  " : "", fg(statusColor(Number(code)))(code), dim(`×${n}`)]);
+    [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
 
 const kindTag = (k) => (k === 1 ? "RESP" : "REQ ");
@@ -105,13 +105,13 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, bo
         tick.get();        // re-render on each state tick (fields mutate in place)
         bodyScroll.get();  // and on scroll
         const r = endpoint(focusKey.get());
-        if (!r) { scrollState.max = 0; return <Text>{dim("endpoint no longer tracked — press esc to go back")}</Text>; }
+        if (!r) { scrollState.max = 0; return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>; }
         const now = Date.now();
         const share = totals.reqs ? (r.count / totals.reqs) * 100 : 0;
         const lat = r.lat.length
           ? `p50 ${fmtMs(percentile(r.lat, 50))} · p95 ${fmtMs(percentile(r.lat, 95))} · ` +
             `p99 ${fmtMs(percentile(r.lat, 99))} · max ${fmtMs(Math.max(...r.lat))}`
-          : dim("no responses paired yet");
+          : fg(muted)("no responses paired yet");
 
         const { cols, rows } = size.get();
         const width = Math.max(20, cols - 4);
@@ -125,25 +125,25 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, bo
           <Box direction="column" width="1fr" height="1fr">
             <Box direction="row" height="fit">
               <Text width={W_METHOD + 1}>{bold(fg(methodColor(r.method))(r.method))}</Text>
-              <Text width="1fr" overflow="ellipsis">{bold(`${r.host}${r.path}`)}</Text>
+              <Text width="1fr" overflow="ellipsis">{bold(fg(accent)(`${r.host}${r.path}`))}</Text>
             </Box>
             <Field name="Requests">
               {bold(fg(accent)(fmtCount(r.count)))}
-              {dim(`  ${share.toFixed(1)}%  ·  `)}
-              {r.rate > 0 ? fg(rateOn)(`${r.rate}/s`) : dim("0/s")}
-              {dim(`  peak ${r.peak}/s`)}
+              {fg(muted)(`  ${share.toFixed(1)}%  ·  `)}
+              {r.rate > 0 ? bold(fg(rateOn)(`${r.rate}/s`)) : fg(muted)("0/s")}
+              {fg(muted)(`  peak ${r.peak}/s`)}
             </Field>
             <Field name="Latency">{lat}</Field>
             <Field name="Status">{statusSpans(r.status)}</Field>
-            <Field name="Bytes">{fmtBytes(r.bytes)}{dim(` · first ${fmtAgo(now - r.first)} ago · last ${fmtAgo(now - r.last)} ago`)}</Field>
+            <Field name="Bytes">{bold(fg(label)(fmtBytes(r.bytes)))}{fg(muted)(` · first ${fmtAgo(now - r.first)} ago · last ${fmtAgo(now - r.last)} ago`)}</Field>
             <Text> </Text>
             <Text overflow="ellipsis">
               {fg(label)(`Recent payloads (${r.samples.length})  ·  j/k scroll`)}
-              {scrollState.max > 0 ? dim(`  ·  ${off}/${scrollState.max}`) : ""}
+              {scrollState.max > 0 ? fg(muted)(`  ·  ${off}/${scrollState.max}`) : ""}
             </Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {r.samples.length === 0
-                ? <Text>{dim("no payloads captured yet")}</Text>
+                ? <Text>{fg(muted)("no payloads captured yet")}</Text>
                 : view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>
           </Box>
