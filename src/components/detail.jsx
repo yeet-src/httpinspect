@@ -1,12 +1,12 @@
-// Detail screen: a per-endpoint breakdown for the endpoint the user pressed
-// Enter on, plus an accordion of the last few captured payloads — each a
-// collapsible row, the selected one expanded to its full headers + JSON body.
-// Reads `focusKey` (which endpoint), `tick` (the endpoint's fields mutate in
-// place, so reading `tick` re-renders), and `detailSel` (the accordion cursor,
-// moved by ↑/↓ in main.jsx). `endpoint()` looks the row up.
+// Detail screen: a per-endpoint breakdown plus a three-pane transaction
+// inspector — a list of captured transactions (left), and the selected one's
+// headers (top-right) and body (bottom-right) in their own scrollable panes.
+// `<`/`>` flip between the request (in) and response (out); `tab` moves focus
+// between the headers/body panes; PgUp/Dn scroll the focused pane. Reads
+// `focusKey`, `tick`, and the nav signals (`txnSel`, `txnDir`, `pane`, `scroll`).
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
 } from "@/lib/format.js";
 
@@ -14,8 +14,6 @@ import {
 // literals pink; punctuation uses the shared muted indigo).
 const J_KEY = rgb(0x8be9fd), J_STR = rgb(0xf1fa8c), J_NUM = rgb(0xbd93f9), J_LIT = rgb(0xff79c6);
 
-// Split one JSON line into colored spans (keys, strings, numbers, literals,
-// punctuation). Tolerant: runs on raw text too, so truncated bodies still color.
 const JSON_TOK = /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|(-?\d+\.?\d*(?:[eE][+-]?\d+)?)|(true|false|null)|([{}\[\],])/g;
 function colorJsonLine(line) {
   const spans = [];
@@ -41,92 +39,93 @@ function wrapTo(line, width) {
   return out;
 }
 
-// A body → display lines, wrapped to `width` and colored. JSON is reformatted
-// (when it parses) and syntax-colored; anything else is shown raw. Coloring a
-// wrapped chunk is best-effort — a value split mid-string just renders plain.
-function bodyLines(body, width) {
-  const t = body.trim();
-  let src = body;
-  if (t.startsWith("{") || t.startsWith("[")) {
-    try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
-  }
-  const out = [];
-  for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) out.push(colorJsonLine(c));
-  return out;
-}
-
-// One captured header line → "Name:" in pink, value plain.
+// "Name:" in pink, value plain.
 function headerLine(l) {
   const i = l.indexOf(":");
   return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
-// Max scroll offset the payload view allows, published each render so main.jsx
-// can clamp PgUp/PgDn line-scrolling without re-deriving the line count.
+// Split a captured message into wrapped+colored header lines and body lines.
+function msgLines(text, width) {
+  const sep = text.indexOf("\r\n\r\n");
+  const headText = sep >= 0 ? text.slice(0, sep) : text;
+  const body = sep >= 0 ? text.slice(sep + 4) : "";
+  const hdr = [];
+  headText.split(/\r?\n/).forEach((l, j) =>
+    wrapTo(l, width).forEach((c, k) => hdr.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
+  let bdy;
+  if (!body.trim()) {
+    bdy = [[fg(muted)("(no body)")]];
+  } else {
+    const t = body.trim();
+    let src = body;
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
+    }
+    bdy = [];
+    for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) bdy.push(colorJsonLine(c));
+  }
+  return { hdr, bdy };
+}
+
+// Max scroll offset of the focused pane, published each render so main.jsx can
+// clamp PgUp/PgDn without re-deriving line counts.
 export const detailView = { max: 0 };
 
-// Components are called `(opts, ...children)` by the JSX runtime, so read the
-// value pieces from the rest args — not a `children` prop.
+// Components are called `(opts, ...children)` by the JSX runtime.
 function Field(opts, ...children) {
   return (
     <Box direction="row" height="fit">
-      <Text width={12}>{fg(label)(opts.name)}</Text>
+      <Text width={11}>{fg(label)(opts.name)}</Text>
       <Text width="1fr" overflow="ellipsis">{children.flat(Infinity)}</Text>
     </Box>
   );
 }
 
-/* Status-code tallies as colored "200×120  404×3" spans, busiest first. */
 function statusSpans(status) {
   const codes = Object.entries(status).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (codes.length === 0) return fg(muted)("— no responses paired yet");
+  if (codes.length === 0) return fg(muted)("— none paired");
   return codes.flatMap(([code, n], i) =>
     [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
 
-const kindTag = (k) => (k === 1 ? "RESP" : "REQ ");
-const dirTag = (d) => (d === 1 ? "in" : "out");
-
-/* The payload accordion as display lines (each an array of colored spans).
- * Every captured payload is a one-line collapsible header (▸) showing its
- * kind/age and a snippet of the request/response line; the selected one (▾)
- * expands to its full headers + JSON-formatted, syntax-colored body, indented. */
-function accordionLines(samples, sel, now, width) {
-  const lines = [];
-  samples.forEach((s, i) => {
-    const open = i === sel;
-    const head = `${open ? "▾" : "▸"} ${kindTag(s.kind)} ${dirTag(s.dir)} · ${fmtAgo(now - s.ts)} ago  `;
-    const snippet = (s.text.split(/\r?\n/)[0] || "").slice(0, Math.max(0, width - head.length));
-    lines.push(open
-      ? [bold(fg(accent)(head)), bold(snippet)]
-      : [fg(muted)(head), fg(muted)(snippet)]);
-    if (!open) return;
-    const sep = s.text.indexOf("\r\n\r\n");
-    const headText = sep >= 0 ? s.text.slice(0, sep) : s.text;
-    const body = sep >= 0 ? s.text.slice(sep + 4) : "";
-    const W = Math.max(8, width - 2);
-    const indent = (sp) => [fg(muted)("  "), ...sp];
-    lines.push([" "]);
-    headText.split(/\r?\n/).forEach((l, j) =>
-      wrapTo(l, W).forEach((c, k) =>
-        lines.push(indent(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c])))));
-    if (body.trim()) {
-      lines.push([" "]);
-      for (const bl of bodyLines(body, W)) lines.push(indent(bl));
-    }
-    lines.push([" "]);
-  });
-  return lines;
+// One transaction list row (left pane).
+function txnRow(t, i, sel, now) {
+  const open = i === sel;
+  const code = t.status ? fg(statusColor(t.status))(String(t.status))
+    : (t.out === null ? fg(muted)("···") : fg(muted)("—"));
+  const lat = t.ms != null ? fg(muted)(` ${fmtMs(t.ms)}`) : "";
+  const spans = [
+    open ? fg(accent)("▸ ") : "  ",
+    fg(open ? accent : muted)(`${fmtAgo(now - t.ts)} ago `.padEnd(9)),
+    code, lat,
+  ];
+  return open
+    ? <Box width="1fr" bg={selBg}><Text height="1" break="none" overflow="hidden">{spans}</Text></Box>
+    : <Text height="1" break="none" overflow="hidden">{spans}</Text>;
 }
 
-export default function DetailPanel({ focusKey, tick, endpoint, totals, size, detailSel, detailScroll }) {
+// A bordered, scrollable pane of pre-built display lines.
+function Pane({ title, lines, off, vis, focused, h }) {
+  const view = lines.slice(off, off + vis);
+  return (
+    <Box border={{ line: "round", fg: focused ? accent : grid }} direction="column"
+      width="1fr" height={`${h}`} overflow="hidden">
+      <Text overflow="ellipsis">
+        {fg(focused ? accent : label)(title)}
+        {lines.length > vis ? fg(muted)(`  ${off + 1}-${Math.min(off + vis, lines.length)}/${lines.length}`) : ""}
+      </Text>
+      {view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
+    </Box>
+  );
+}
+
+export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, txnDir, pane, scroll }) {
   return (
     <Box border={{ line: "round", fg: grid }} padding={1} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       {() => {
-        tick.get();         // re-render on each state tick (fields mutate in place)
-        detailSel.get();    // and when the accordion cursor moves
-        detailScroll.get(); // and when the open payload is line-scrolled
+        tick.get(); txnSel.get(); txnDir.get(); pane.get(); scroll.get();
         const r = endpoint(focusKey.get());
         if (!r) return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>;
         const now = Date.now();
@@ -137,13 +136,29 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
           : fg(muted)("no responses paired yet");
 
         const { cols, rows } = size.get();
-        const width = Math.max(20, cols - 4);
-        const sel = Math.min(Math.max(0, detailSel.get()), Math.max(0, r.samples.length - 1));
-        const lines = accordionLines(r.samples, sel, now, width);
-        const vis = Math.max(3, rows - 15); // leave room for the stats block + chrome
-        detailView.max = Math.max(0, lines.length - vis);
-        const off = Math.min(Math.max(0, detailScroll.get()), detailView.max);
-        const view = lines.slice(off, off + vis);
+        const txns = r.txns;
+        const sel = Math.min(Math.max(0, txnSel.get()), Math.max(0, txns.length - 1));
+        const dir = txnDir.get(); // 0 = in (request), 1 = out (response)
+        const txn = txns[sel];
+        const msg = txn ? (dir === 1 ? txn.out : txn.in) : null;
+
+        // Pane geometry (cells), derived from the terminal size.
+        const W = Math.max(16, cols - 34);
+        const rowH = Math.max(5, rows - 13);             // height shared by the panes row
+        const headersH = Math.max(3, Math.floor(rowH * 0.4));
+        const bodyH = Math.max(3, rowH - headersH);
+        const hVis = Math.max(1, headersH - 3);
+        const bVis = Math.max(1, bodyH - 3);
+
+        const { hdr, bdy } = msg
+          ? msgLines(msg, W)
+          : { hdr: [[fg(muted)(dir === 1 ? "no response captured" : "no request captured")]], bdy: [[fg(muted)("—")]] };
+
+        const focusBody = pane.get() === 1;
+        const maxFor = focusBody ? Math.max(0, bdy.length - bVis) : Math.max(0, hdr.length - hVis);
+        detailView.max = maxFor;
+        const off = Math.min(Math.max(0, scroll.get()), maxFor);
+        const dirLabel = dir === 1 ? "<< out (response)" : ">> in (request)";
 
         return (
           <Box direction="column" width="1fr" height="1fr">
@@ -159,16 +174,18 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
             </Field>
             <Field name="Latency">{lat}</Field>
             <Field name="Status">{statusSpans(r.status)}</Field>
-            <Field name="Bytes">{bold(fg(label)(fmtBytes(r.bytes)))}{fg(muted)(` · first ${fmtAgo(now - r.first)} ago · last ${fmtAgo(now - r.last)} ago`)}</Field>
-            <Text> </Text>
-            <Text overflow="ellipsis">
-              {fg(label)(`Payloads (${r.samples.length})`)}
-              {r.samples.length ? fg(muted)(`  ·  ↑/↓ payload · PgUp/Dn scroll  ·  ${sel + 1}/${r.samples.length}`) : ""}
-            </Text>
-            <Box direction="column" width="1fr" height="1fr" overflow="hidden">
-              {r.samples.length === 0
-                ? <Text>{fg(muted)("no payloads captured yet")}</Text>
-                : view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
+            <Field name="Bytes">{bold(fg(label)(fmtBytes(r.bytes)))}{fg(muted)(` · last ${fmtAgo(now - r.last)} ago`)}</Field>
+            <Box direction="row" width="1fr" height={`${rowH}`} overflow="hidden">
+              <Box border={{ line: "round", fg: grid }} direction="column" width="26" height={`${rowH}`} overflow="hidden">
+                <Text overflow="ellipsis">{fg(label)(`txns (${txns.length})`)}</Text>
+                {txns.length === 0
+                  ? <Text>{fg(muted)("none yet")}</Text>
+                  : txns.map((t, i) => txnRow(t, i, sel, now))}
+              </Box>
+              <Box direction="column" width="1fr" height={`${rowH}`}>
+                <Pane title={`headers  ${dirLabel}`} lines={hdr} off={focusBody ? 0 : off} vis={hVis} focused={!focusBody} h={headersH} />
+                <Pane title="body" lines={bdy} off={focusBody ? off : 0} vis={bVis} focused={focusBody} h={bodyH} />
+              </Box>
             </Box>
           </Box>
         );

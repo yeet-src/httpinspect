@@ -37,8 +37,10 @@ if (typeof tty === "undefined") {
 // per-endpoint detail screen is open. Both are signals so the view reacts.
 const sel = signal(0);
 const focusKey = signal(null);
-const detailSel = signal(0);    // which payload is expanded in the detail accordion
-const detailScroll = signal(0); // line offset within the open payload (PgUp/Dn)
+const txnSel = signal(0);  // selected transaction in the detail inspector
+const txnDir = signal(0);  // 0 = in (request), 1 = out (response)
+const pane = signal(1);    // focused detail pane: 0 = headers, 1 = body
+const scroll = signal(0);  // line offset of the focused detail pane
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -51,7 +53,7 @@ function enterDetail() {
   const data = rows.get();
   if (data.length === 0) return;
   const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) { detailSel.set(0); detailScroll.set(0); focusKey.set(keyOf(row)); }
+  if (row) { txnSel.set(0); txnDir.set(0); pane.set(1); scroll.set(0); focusKey.set(keyOf(row)); }
 }
 
 const exitDetail = () => focusKey.set(null);
@@ -64,7 +66,7 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} detailSel={detailSel} detailScroll={detailScroll} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} txnDir={txnDir} pane={pane} scroll={scroll} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
     <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
     <Legend focusKey={focusKey} />
@@ -84,20 +86,17 @@ tty.on("keydown", (e) => {
   if (focusKey.get()) {
     if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
     const r = endpoint(focusKey.get());
-    const n = r ? r.samples.length : 0;
-    // ↑/↓ (j/k) move the accordion cursor between payloads, snapping the new
-    // payload's header to the top; PgUp/Dn line-scroll within the open one.
-    const toPayload = (d) => {
-      if (!n) return;
-      const v = Math.max(0, Math.min(n - 1, detailSel.get() + d));
-      detailSel.set(v);
-      detailScroll.set(v); // header line index == payload index (others collapsed)
-    };
-    const scroll = (d) => detailScroll.set(Math.max(0, Math.min(detailView.max, detailScroll.get() + d)));
-    if (e.code === "ArrowDown" || e.key === "j") toPayload(1);
-    else if (e.code === "ArrowUp" || e.key === "k") toPayload(-1);
-    else if (e.code === "PageDown") scroll(10);
-    else if (e.code === "PageUp") scroll(-10);
+    const n = r ? r.txns.length : 0;
+    // ↑/↓ (j/k) pick a transaction; > / l show the in (request), < / h the out
+    // (response); tab moves focus between the headers and body panes; PgUp/Dn
+    // scroll the focused pane. Any of these resets the pane scroll.
+    if (e.code === "ArrowDown" || e.key === "j") { if (n) { txnSel.set(Math.min(n - 1, txnSel.get() + 1)); scroll.set(0); } }
+    else if (e.code === "ArrowUp" || e.key === "k") { if (n) { txnSel.set(Math.max(0, txnSel.get() - 1)); scroll.set(0); } }
+    else if (e.key === ">" || e.key === "l") { txnDir.set(0); scroll.set(0); }
+    else if (e.key === "<" || e.key === "h") { txnDir.set(1); scroll.set(0); }
+    else if (e.code === "Tab") { pane.set(pane.get() === 1 ? 0 : 1); scroll.set(0); }
+    else if (e.code === "PageDown") scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + 10)));
+    else if (e.code === "PageUp") scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() - 10)));
     return;
   }
 
