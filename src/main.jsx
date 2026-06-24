@@ -41,6 +41,8 @@ const txnSel = signal(0);    // selected request in the detail requests table
 const open = signal(false);  // false = requests table, true = body view
 const txnDir = signal(0);    // 0 = in (request), 1 = out (response)
 const scroll = signal(0);    // line offset of the body view
+const hOpen = signal(true);  // headers section expanded in the body view
+const bOpen = signal(true);  // body section expanded in the body view
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -66,7 +68,7 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} open={open} txnDir={txnDir} scroll={scroll} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} open={open} txnDir={txnDir} scroll={scroll} hOpen={hOpen} bOpen={bOpen} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
     <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
     <Legend focusKey={focusKey} open={open} />
@@ -93,14 +95,17 @@ tty.on("keydown", (e) => {
       else if (e.code === "ArrowUp" || e.key === "k") { if (n) txnSel.set(Math.max(0, txnSel.get() - 1)); }
       else if (e.code === "PageDown") { if (n) txnSel.set(Math.min(n - 1, txnSel.get() + 10)); }
       else if (e.code === "PageUp") { if (n) txnSel.set(Math.max(0, txnSel.get() - 10)); }
-      else if (e.code === "Enter" || e.code === "ArrowRight") { if (n) { open.set(true); txnDir.set(0); scroll.set(0); } }
+      else if (e.code === "Enter" || e.code === "ArrowRight") { if (n) { open.set(true); txnDir.set(0); scroll.set(0); hOpen.set(true); bOpen.set(true); } }
       return;
     }
-    // body view: < / > flip in/out, ↑/↓ + PgUp/Dn scroll, esc back to the table.
+    // body view: < / > flip in/out, h/b collapse the headers/body sections,
+    // ↑/↓ + PgUp/Dn scroll, esc back to the table.
     const scrollBy = (d) => scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + d)));
     if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { open.set(false); return; }
-    else if (e.key === ">" || e.key === "l") { txnDir.set(0); scroll.set(0); }
-    else if (e.key === "<" || e.key === "h") { txnDir.set(1); scroll.set(0); }
+    else if (e.key === ">") { txnDir.set(0); scroll.set(0); }
+    else if (e.key === "<") { txnDir.set(1); scroll.set(0); }
+    else if (e.key === "h") { hOpen.set(!hOpen.get()); scroll.set(0); }
+    else if (e.key === "b") { bOpen.set(!bOpen.get()); scroll.set(0); }
     else if (e.code === "ArrowDown" || e.key === "j") scrollBy(1);
     else if (e.code === "ArrowUp" || e.key === "k") scrollBy(-1);
     else if (e.code === "PageDown") scrollBy(10);

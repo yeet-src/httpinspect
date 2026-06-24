@@ -7,7 +7,7 @@
 // `scroll`). `open` distinguishes the two screens.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, statusColor, latColor,
 } from "@/lib/format.js";
 
@@ -43,26 +43,33 @@ function headerLine(l) {
   return i < 0 ? [fg(muted)(l)] : [fg(label)(l.slice(0, i + 1)), l.slice(i + 1)];
 }
 
-// A captured message → wrapped+colored display lines: request/response line
-// (bold), headers, a blank, then the JSON-formatted, colored body.
-function msgLines(text, width) {
+// A captured message → wrapped+colored display lines. Headers and body are
+// collapsible sections (▾ open / ▸ collapsed), driven by hOpen/bOpen.
+function msgLines(text, width, hOpen, bOpen) {
   const sep = text.indexOf("\r\n\r\n");
   const headText = sep >= 0 ? text.slice(0, sep) : text;
   const body = sep >= 0 ? text.slice(sep + 4) : "";
-  const rule = (lbl) => [fg(label)(`── ${lbl} ` + "─".repeat(Math.max(0, width - lbl.length - 4)))];
-  const out = [rule("headers")];
-  headText.split(/\r?\n/).forEach((l, j) =>
-    wrapTo(l, width).forEach((c, k) => out.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
-  out.push([" "], rule("body"));
-  const t = body.trim();
-  if (!t) {
-    out.push([fg(muted)("(no body)")]);
-  } else {
-    let src = body;
-    if (t.startsWith("{") || t.startsWith("[")) {
-      try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
+  const rule = (lbl) => [fg(label)(`${lbl} ` + "─".repeat(Math.max(0, width - lbl.length - 1)))];
+  const headerCount = headText.split(/\r?\n/).length;
+
+  const out = [rule(`${hOpen ? "▾" : "▸"} headers (${headerCount})`)];
+  if (hOpen) {
+    headText.split(/\r?\n/).forEach((l, j) =>
+      wrapTo(l, width).forEach((c, k) => out.push(j === 0 ? [bold(c)] : (k === 0 ? headerLine(c) : [c]))));
+  }
+
+  out.push([" "], rule(`${bOpen ? "▾" : "▸"} body`));
+  if (bOpen) {
+    const t = body.trim();
+    if (!t) {
+      out.push([fg(muted)("(no body)")]);
+    } else {
+      let src = body;
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try { src = JSON.stringify(JSON.parse(t), null, 2); } catch { /* truncated: color raw */ }
+      }
+      for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) out.push(colorJsonLine(c));
     }
-    for (const line of src.split(/\r?\n/)) for (const c of wrapTo(line, width)) out.push(colorJsonLine(c));
   }
   return out;
 }
@@ -118,7 +125,7 @@ function tableRow(t, on, now) {
   const info = t.in.split(/\r?\n/)[0] || "";
   const method = info.split(" ")[0] || "";
   return (
-    <Box direction="row" height="1">
+    <Box direction="row" height="1" bg={on ? selBg : undefined}>
       <Text width={2}>{on ? fg(accent)("▸") : " "}</Text>
       <Text width={C_TIME}>{fg(on ? accent : muted)(`${fmtAgo(now - t.ts)} ago`)}</Text>
       <Text width={C_CODE}>{t.status ? bold(fg(statusColor(t.status))(String(t.status))) : fg(muted)(t.out === null ? "·" : "—")}</Text>
@@ -129,12 +136,12 @@ function tableRow(t, on, now) {
   );
 }
 
-export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, open, txnDir, scroll }) {
+export default function DetailPanel({ focusKey, tick, endpoint, totals, size, txnSel, open, txnDir, scroll, hOpen, bOpen }) {
   return (
     <Box border={{ line: "round", fg: grid }} padding={1} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       {() => {
-        tick.get(); txnSel.get(); open.get(); txnDir.get(); scroll.get();
+        tick.get(); txnSel.get(); open.get(); txnDir.get(); scroll.get(); hOpen.get(); bOpen.get();
         const r = endpoint(focusKey.get());
         if (!r) return <Text>{fg(muted)("endpoint no longer tracked — press esc to go back")}</Text>;
         const now = Date.now();
@@ -164,7 +171,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
         const dir = txnDir.get(); // 0 = in (request), 1 = out (response)
         const msg = txn ? (dir === 1 ? txn.out : txn.in) : null;
         const W = Math.max(24, cols - 6);
-        const lines = msg ? msgLines(msg, W)
+        const lines = msg ? msgLines(msg, W, hOpen.get(), bOpen.get())
           : [[fg(muted)(dir === 1 ? "no response captured (egress not seen)" : "no request captured")]];
         const vis = Math.max(3, rows - 8);
         detailView.max = Math.max(0, lines.length - vis);
@@ -177,7 +184,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
               {fg(label)(`req ${txns.length ? sel + 1 : 0}/${txns.length}  ·  ${dirLabel}`)}
               {txn && txn.status ? [fg(muted)("  ·  "), bold(fg(statusColor(txn.status))(String(txn.status)))] : ""}
               {txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : ""}
-              {fg(muted)("   < > in/out · ↑/↓ scroll · esc back")}
+              {fg(muted)("   < > in/out · h/b collapse · ↑/↓ scroll · esc")}
             </Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {lines.slice(off, off + vis).map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
