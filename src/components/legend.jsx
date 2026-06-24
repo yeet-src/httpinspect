@@ -7,7 +7,7 @@ export default function Legend({ focusKey, open }) {
   return (
     <Text>{() => {
       const keys = !focusKey.get()
-        ? [["↑/↓", "move"], ["PgUp/Dn", "page"], ["⏎", "requests"], ["q / Ctrl-C", "quit"]]
+        ? [["↑/↓", "move"], ["⏎/→", "requests"], ["PgUp/Dn", "page"], ["q / Ctrl-C", "quit"]]
         : open.get()
           ? [["tab", "in/out"], ["h/b", "collapse"], ["↑/↓", "scroll"], ["←/→", "back"]]
           : [["↑/↓", "request"], ["⏎", "open body"], ["esc", "back"]];

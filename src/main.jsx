@@ -119,7 +119,7 @@ tty.on("keydown", (e) => {
     case "ArrowUp": moveSel(-1); break;
     case "PageDown": moveSel(10); break;
     case "PageUp": moveSel(-10); break;
-    case "Enter": enterDetail(); break;
+    case "Enter": case "ArrowRight": enterDetail(); break;
     default:
       if (e.key === "j") moveSel(1);
       else if (e.key === "k") moveSel(-1);
