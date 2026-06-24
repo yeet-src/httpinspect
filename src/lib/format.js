@@ -16,7 +16,7 @@ export const accent = rgb(0x8be9fd); /* cyan: brand, counts, selection */
 export const rateOn = rgb(0x50fa7b); /* green: a live (>0) req/s value */
 export const muted  = rgb(0x8b9bf5); /* soft indigo: secondary text (replaces dim) */
 export const grid   = rgb(0x6d5dfc); /* indigo: table border + dividers */
-export const selBg  = rgb(0x352b5e); /* deep violet: highlighted row */
+export const selBg  = rgb(0x3b3168); /* indigo-violet: highlighted/selected row */
 export const label  = rgb(0xff79c6); /* pink: field labels / header names */
 
 /* Fixed column widths (cells); PATH takes the remaining 1fr. HOST is flexible:

@@ -6,7 +6,7 @@
 // moved by ↑/↓ in main.jsx). `endpoint()` looks the row up.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
 } from "@/lib/format.js";
 
@@ -157,7 +157,10 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {r.samples.length === 0
                 ? <Text>{fg(muted)("no payloads captured yet")}</Text>
-                : view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
+                : view.map((l, idx) =>
+                    detailTop + idx === selLine
+                      ? <Box width="1fr" bg={selBg}><Text height="1" break="none" overflow="hidden">{l}</Text></Box>
+                      : <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>
           </Box>
         );
