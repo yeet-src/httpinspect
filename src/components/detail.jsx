@@ -6,7 +6,7 @@
 // moved by ↑/↓ in main.jsx). `endpoint()` looks the row up.
 import { Box, Text, bold, fg, rgb } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, muted, selBg, W_METHOD,
+  methodColor, accent, rateOn, grid, label, muted, W_METHOD,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor,
 } from "@/lib/format.js";
 
@@ -90,15 +90,11 @@ const dirTag = (d) => (d === 1 ? "in" : "out");
 /* The payload accordion as display lines (each an array of colored spans).
  * Every captured payload is a one-line collapsible header (▸) showing its
  * kind/age and a snippet of the request/response line; the selected one (▾)
- * expands to its full headers + JSON-formatted, syntax-colored body, indented.
- * Returns the lines plus the selected header's line index so the view can keep
- * it on screen. */
+ * expands to its full headers + JSON-formatted, syntax-colored body, indented. */
 function accordionLines(samples, sel, now, width) {
   const lines = [];
-  let selLine = 0;
   samples.forEach((s, i) => {
     const open = i === sel;
-    if (open) selLine = lines.length;
     const head = `${open ? "▾" : "▸"} ${kindTag(s.kind)} ${dirTag(s.dir)} · ${fmtAgo(now - s.ts)} ago  `;
     const snippet = (s.text.split(/\r?\n/)[0] || "").slice(0, Math.max(0, width - head.length));
     lines.push(open
@@ -120,7 +116,7 @@ function accordionLines(samples, sel, now, width) {
     }
     lines.push([" "]);
   });
-  return { lines, selLine };
+  return lines;
 }
 
 export default function DetailPanel({ focusKey, tick, endpoint, totals, size, detailSel, detailScroll }) {
@@ -143,7 +139,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
         const { cols, rows } = size.get();
         const width = Math.max(20, cols - 4);
         const sel = Math.min(Math.max(0, detailSel.get()), Math.max(0, r.samples.length - 1));
-        const { lines, selLine } = accordionLines(r.samples, sel, now, width);
+        const lines = accordionLines(r.samples, sel, now, width);
         const vis = Math.max(3, rows - 15); // leave room for the stats block + chrome
         detailView.max = Math.max(0, lines.length - vis);
         const off = Math.min(Math.max(0, detailScroll.get()), detailView.max);
@@ -172,10 +168,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, de
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
               {r.samples.length === 0
                 ? <Text>{fg(muted)("no payloads captured yet")}</Text>
-                : view.map((l, idx) =>
-                    off + idx === selLine
-                      ? <Box width="1fr" bg={selBg}><Text height="1" break="none" overflow="hidden">{l}</Text></Box>
-                      : <Text height="1" break="none" overflow="hidden">{l}</Text>)}
+                : view.map((l) => <Text height="1" break="none" overflow="hidden">{l}</Text>)}
             </Box>
           </Box>
         );
