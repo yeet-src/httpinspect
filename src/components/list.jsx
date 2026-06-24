@@ -45,7 +45,7 @@ function Row({ row, rank, selected }) {
   const p99 = row.lat?.length ? percentile(row.lat, 99) : null;
   return (
     <Box direction="row" height="fit" bg={selected ? selBg : undefined}>
-      <Text width={W_RANK}>{selected ? fg(accent)("› " + pad(rank, 2).slice(1)) : fg(muted)(pad(rank, 2) + " ")}</Text>
+      <Text width={W_RANK}>{fg(selected ? accent : muted)(pad(rank, 2) + " ")}</Text>
       <Text width={W_METHOD}>{bold(fg(methodColor(row.method))(padEnd(row.method, W_METHOD)))}</Text>
       <Text width={W_HOST} overflow="ellipsis">{fg(muted)(row.host)}</Text>
       <Text width="1fr" overflow="ellipsis">{bold(row.path)}</Text>
