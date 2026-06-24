@@ -3,10 +3,23 @@
 // highlighted index); `size` reflows the visible window on resize.
 import { Box, Text, bold, dim, fg } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, selBg,
-  W_RANK, W_METHOD, W_COUNT, W_RATE, W_HOST, W_LAST,
-  pad, padEnd, fmtCount, fmtAgo,
+  methodColor, accent, rateOn, grid, selBg, statusColor, statusClasses, latColor, percentile,
+  W_RANK, W_METHOD, W_RATE, W_HOST, W_LAST, W_STATUS, W_LAT,
+  pad, padEnd, fmtCount, fmtRate, fmtAgo, fmtMs,
 } from "@/lib/format.js";
+
+/* Smooth the instantaneous per-second rate over the last ~10s of history so the
+ * RPS column shows a meaningful fractional value instead of a jumpy integer. */
+function smoothRate(row) {
+  const h = row.hist;
+  if (!h?.length) return row.rate;
+  const n = Math.min(10, h.length);
+  let sum = 0;
+  for (let i = h.length - n; i < h.length; i++) sum += h[i];
+  return sum / n;
+}
+
+const STATUS_CLASSES = [2, 3, 4, 5];
 
 function HeaderRow() {
   return (
@@ -15,23 +28,34 @@ function HeaderRow() {
       <Text width={W_METHOD}>{bold("METHOD")}</Text>
       <Text width={W_HOST}>{bold("HOST")}</Text>
       <Text width="1fr">{bold("PATH")}</Text>
-      <Text width={W_COUNT}>{bold(pad("COUNT", W_COUNT))}</Text>
-      <Text width={W_RATE}>{bold(pad("REQ/S", W_RATE))}</Text>
+      {STATUS_CLASSES.map((c) => (
+        <Text width={W_STATUS}>{bold(fg(statusColor(c * 100))(pad(`${c}xx`, W_STATUS)))}</Text>
+      ))}
+      <Text width={W_RATE}>{bold(pad("RPS", W_RATE))}</Text>
+      <Text width={W_LAT}>{bold(pad("P99", W_LAT))}</Text>
       <Text width={W_LAST}>{bold(pad("LAST", W_LAST))}</Text>
     </Box>
   );
 }
 
 function Row({ row, rank, selected }) {
-  const rateStr = row.rate > 0 ? pad(fmtCount(row.rate), W_RATE) : dim(pad("·", W_RATE));
+  const rps = smoothRate(row);
+  const rateStr = rps > 0 ? pad(fmtRate(rps), W_RATE) : dim(pad("·", W_RATE));
+  const status = statusClasses(row.status);
+  const p99 = row.lat?.length ? percentile(row.lat, 99) : null;
   return (
     <Box direction="row" height="fit" bg={selected ? selBg : undefined}>
       <Text width={W_RANK}>{selected ? fg(accent)("› " + pad(rank, 2).slice(1)) : dim(pad(rank, 2) + " ")}</Text>
       <Text width={W_METHOD}>{fg(methodColor(row.method))(padEnd(row.method, W_METHOD))}</Text>
       <Text width={W_HOST} overflow="ellipsis">{dim(row.host)}</Text>
       <Text width="1fr" overflow="ellipsis">{row.path}</Text>
-      <Text width={W_COUNT}>{bold(fg(accent)(pad(fmtCount(row.count), W_COUNT)))}</Text>
-      <Text width={W_RATE}>{row.rate > 0 ? fg(rateOn)(rateStr) : rateStr}</Text>
+      {STATUS_CLASSES.map((c) => (
+        <Text width={W_STATUS}>
+          {status[c] > 0 ? fg(statusColor(c * 100))(pad(fmtCount(status[c]), W_STATUS)) : dim(pad("·", W_STATUS))}
+        </Text>
+      ))}
+      <Text width={W_RATE}>{rps > 0 ? fg(rateOn)(rateStr) : rateStr}</Text>
+      <Text width={W_LAT}>{p99 != null ? fg(latColor(p99))(pad(fmtMs(p99), W_LAT)) : dim(pad("·", W_LAT))}</Text>
       <Text width={W_LAST}>{dim(pad(fmtAgo(Date.now() - row.last), W_LAST))}</Text>
     </Box>
   );
