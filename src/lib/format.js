@@ -1,25 +1,30 @@
 // Pure presentation helpers — strings, color, and the table's column widths.
 // No signals or BPF, so it's safe to import anywhere; the components reach it
 // through the `@/` alias (resolved at bundle time).
-import { rgb, idx } from "yeet:tui";
+import { rgb } from "yeet:tui";
 
-/* Per-method accent colors; unknown methods fall back to plain grey. */
+/* Per-method accent colors — all vibrant, no greys. */
 export const METHOD_COLORS = {
-  GET: rgb(0x4ec9b0), POST: rgb(0xdcdcaa), PUT: rgb(0x9cdcfe),
-  PATCH: rgb(0xc586c0), DELETE: rgb(0xf48771), HEAD: rgb(0x808080),
-  OPTIONS: rgb(0x808080), CONNECT: rgb(0x808080), TRACE: rgb(0x808080),
+  GET: rgb(0x50fa7b), POST: rgb(0xf1fa8c), PUT: rgb(0x8be9fd),
+  PATCH: rgb(0xbd93f9), DELETE: rgb(0xff5555), HEAD: rgb(0xff79c6),
+  OPTIONS: rgb(0xffb86c), CONNECT: rgb(0x80ffea), TRACE: rgb(0xd6acff),
 };
-export const METHOD_FALLBACK = idx(7);
+export const METHOD_FALLBACK = rgb(0xbd93f9);
 export const methodColor = (m) => METHOD_COLORS[m] || METHOD_FALLBACK;
 
-export const accent = rgb(0x4fc1ff); /* httptop brand + count column */
-export const rateOn = rgb(0x4ec9b0); /* a live (>0) req/s value */
-export const grid = idx(8);          /* table border */
-export const selBg = idx(236);       /* highlighted row in the list */
-export const label = idx(244);       /* detail-screen field labels */
+export const accent = rgb(0x8be9fd); /* cyan: brand, counts, selection */
+export const rateOn = rgb(0x50fa7b); /* green: a live (>0) req/s value */
+export const muted  = rgb(0x8b9bf5); /* soft indigo: secondary text (replaces dim) */
+export const grid   = rgb(0x6d5dfc); /* indigo: table border + dividers */
+export const selBg  = rgb(0x3b3168); /* indigo-violet: highlighted/selected row */
+export const label  = rgb(0xff79c6); /* pink: field labels / header names */
 
-/* Fixed column widths (cells); PATH takes the remaining 1fr. */
-export const W_RANK = 4, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_HOST = 22, W_LAST = 6;
+/* Fixed column widths (cells); PATH takes the remaining 1fr. HOST is flexible:
+ * at least 20 cells, ~30% of the row, capped at 64 — so long FQDN:port hosts
+ * (e.g. `auth.yeet.plumbing:8081`) show in full on a wide terminal and fall
+ * back to ellipsis only when genuinely cramped. */
+export const W_RANK = 4, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_LAST = 6, W_STATUS = 5, W_LAT = 7;
+export const W_HOST = "clamp(20, 30%, 64)";
 
 export const pad = (s, w) => String(s).padStart(w);
 export const padEnd = (s, w) => String(s).padEnd(w);
@@ -30,6 +35,11 @@ export function fmtCount(n) {
   if (n >= 10_000) return (n / 1000).toFixed(0) + "k";
   if (n >= 1000) return (n / 1000).toFixed(1) + "k";
   return String(n);
+}
+
+/* requests/sec to one decimal for readable low rates; k/M for high ones. */
+export function fmtRate(n) {
+  return n >= 1000 ? fmtCount(n) : n.toFixed(1);
 }
 
 export function fmtBytes(n) {
@@ -64,11 +74,30 @@ export function fmtMs(ms) {
 
 /* HTTP status code -> color by class (2xx green, 3xx blue, 4xx yellow, 5xx red). */
 export function statusColor(code) {
-  if (code >= 500) return rgb(0xf48771);
-  if (code >= 400) return rgb(0xdcdcaa);
-  if (code >= 300) return rgb(0x9cdcfe);
-  if (code >= 200) return rgb(0x4ec9b0);
+  if (code >= 500) return rgb(0xff5555);
+  if (code >= 400) return rgb(0xf1fa8c);
+  if (code >= 300) return rgb(0x8be9fd);
+  if (code >= 200) return rgb(0x50fa7b);
   return METHOD_FALLBACK;
+}
+
+/* Sum a row's { code: count } status map into { 2,3,4,5 } class buckets
+ * (1xx and unparsed 0 are dropped). */
+export function statusClasses(status) {
+  const b = { 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const code in status) {
+    const c = Math.floor(Number(code) / 100);
+    if (b[c] !== undefined) b[c] += status[code];
+  }
+  return b;
+}
+
+/* Latency heat: white (fast) → red (slow), saturating at ~500ms. */
+const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+export function latColor(ms) {
+  const t = Math.max(0, Math.min(1, ms / 500));
+  const white = [0xff, 0xff, 0xff], red = [0xff, 0x55, 0x55];
+  return rgb(lerp(white[0], red[0], t), lerp(white[1], red[1], t), lerp(white[2], red[2], t));
 }
 
 /* p-th percentile (0..100) of an unsorted numeric array; 0 if empty. */

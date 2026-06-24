@@ -18,7 +18,7 @@ import { ifaceLabel } from "@/probes/probe.js";
 import { rows, totals, tick, endpoint, endpointCount, keyOf } from "@/probes/httptop.js";
 import StatusBar from "@/components/statusbar.jsx";
 import ListPanel from "@/components/list.jsx";
-import DetailPanel from "@/components/detail.jsx";
+import DetailPanel, { detailView } from "@/components/detail.jsx";
 import Footer from "@/components/footer.jsx";
 import Legend from "@/components/legend.jsx";
 
@@ -37,6 +37,12 @@ if (typeof tty === "undefined") {
 // per-endpoint detail screen is open. Both are signals so the view reacts.
 const sel = signal(0);
 const focusKey = signal(null);
+const txnSel = signal(0);    // selected request in the detail requests table
+const open = signal(false);  // false = requests table, true = body view
+const txnDir = signal(0);    // 0 = in (request), 1 = out (response)
+const scroll = signal(0);    // line offset of the body view
+const hOpen = signal(true);  // headers section expanded in the body view
+const bOpen = signal(true);  // body section expanded in the body view
 
 function moveSel(delta) {
   const n = rows.get().length;
@@ -49,7 +55,7 @@ function enterDetail() {
   const data = rows.get();
   if (data.length === 0) return;
   const row = data[Math.max(0, Math.min(data.length - 1, sel.get()))];
-  if (row) focusKey.set(keyOf(row));
+  if (row) { txnSel.set(0); txnDir.set(0); open.set(false); scroll.set(0); focusKey.set(keyOf(row)); }
 }
 
 const exitDetail = () => focusKey.set(null);
@@ -62,10 +68,10 @@ const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
     <StatusBar ifaceLabel={ifaceLabel} />
     {() => focusKey.get()
-      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} />
+      ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} txnSel={txnSel} open={open} txnDir={txnDir} scroll={scroll} hOpen={hOpen} bOpen={bOpen} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
-    <Footer totals={totals} endpointCount={endpointCount} />
-    <Legend focusKey={focusKey} />
+    <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
+    <Legend focusKey={focusKey} open={open} />
   </Box>
 );
 
@@ -80,7 +86,31 @@ tty.on("keydown", (e) => {
   if (e.ctrlKey && e.code === "c") { yeet.exit(); return; }
 
   if (focusKey.get()) {
-    if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") exitDetail();
+    const r = endpoint(focusKey.get());
+    const n = r ? r.txns.length : 0;
+    if (!open.get()) {
+      // requests table: ↑/↓ select, ⏎/→ open the body view, esc back to list.
+      if (e.code === "Escape" || e.code === "ArrowLeft" || e.key === "q") { exitDetail(); return; }
+      if (e.code === "ArrowDown" || e.key === "j") { if (n) txnSel.set(Math.min(n - 1, txnSel.get() + 1)); }
+      else if (e.code === "ArrowUp" || e.key === "k") { if (n) txnSel.set(Math.max(0, txnSel.get() - 1)); }
+      else if (e.code === "PageDown") { if (n) txnSel.set(Math.min(n - 1, txnSel.get() + 10)); }
+      else if (e.code === "PageUp") { if (n) txnSel.set(Math.max(0, txnSel.get() - 10)); }
+      else if (e.code === "Enter" || e.code === "ArrowRight") { if (n) { open.set(true); txnDir.set(0); scroll.set(0); hOpen.set(true); bOpen.set(true); } }
+      return;
+    }
+    // body view: < / > flip in/out, h/b collapse the headers/body sections,
+    // ↑/↓ + PgUp/Dn scroll, esc back to the table.
+    const scrollBy = (d) => scroll.set(Math.max(0, Math.min(detailView.max, scroll.get() + d)));
+    if (e.code === "Escape" || e.code === "ArrowLeft" || e.code === "ArrowRight" || e.key === "q") { open.set(false); return; }
+    else if (e.code === "Tab") { txnDir.set(txnDir.get() === 1 ? 0 : 1); scroll.set(0); }
+    else if (e.key === ">") { txnDir.set(0); scroll.set(0); }
+    else if (e.key === "<") { txnDir.set(1); scroll.set(0); }
+    else if (e.key === "h") { hOpen.set(!hOpen.get()); scroll.set(0); }
+    else if (e.key === "b") { bOpen.set(!bOpen.get()); scroll.set(0); }
+    else if (e.code === "ArrowDown" || e.key === "j") scrollBy(1);
+    else if (e.code === "ArrowUp" || e.key === "k") scrollBy(-1);
+    else if (e.code === "PageDown") scrollBy(10);
+    else if (e.code === "PageUp") scrollBy(-10);
     return;
   }
 
@@ -89,7 +119,7 @@ tty.on("keydown", (e) => {
     case "ArrowUp": moveSel(-1); break;
     case "PageDown": moveSel(10); break;
     case "PageUp": moveSel(-10); break;
-    case "Enter": enterDetail(); break;
+    case "Enter": case "ArrowRight": enterDetail(); break;
     default:
       if (e.key === "j") moveSel(1);
       else if (e.key === "k") moveSel(-1);

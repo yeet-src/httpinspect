@@ -10,8 +10,7 @@
 // `rows`, so a from() over `rows` would tear the ring buffer down whenever
 // detail is open. A daemon-style always-on feed is the right shape here.
 import { signal } from "yeet:tui";
-import { RingBuf } from "yeet:bpf";
-import { control } from "@/probes/probe.js";
+import { subscribe } from "@/probes/probe.js";
 import { fmtCount } from "@/lib/format.js";
 
 export const TICK_MS = 400; /* redraw cadence between per-second rate samples */
@@ -36,6 +35,7 @@ export const tick = signal(0);
 
 export const HIST_LEN = 60;  /* req/s samples kept per endpoint (≈1 min) */
 export const LAT_LEN = 200;  /* recent response latencies kept (ms) */
+export const TXN_MAX = 50;   /* recent transactions kept per endpoint (inspect pane) */
 
 /* ---- parsing ------------------------------------------------------ */
 function bytesToLatin1(bytes, max) {
@@ -115,6 +115,10 @@ function isDuplicate(ev, now) {
 const pending = new Map(); // flowKey -> [entry, …]
 const flowKey = (ev) => `${ev.family}:${Math.min(ev.sport, ev.dport)}-${Math.max(ev.sport, ev.dport)}`;
 
+/* Decode the captured prefix of an event into latin1 text (line + headers +
+ * whatever body fit in the first segment). */
+const decode = (ev, data) => bytesToLatin1(data.subarray(0, Number(ev.captured)), Number(ev.captured));
+
 /* one ring-buffer event (an `http_event`, wrapped under its btf_struct name) */
 function onEvent(raw) {
   const ev = raw.http_event ?? raw;
@@ -125,7 +129,7 @@ function onEvent(raw) {
     ? ev.data
     : Uint8Array.from(Object.values(ev.data));
 
-  if (ev.kind === 1) onResponse(ev, data, now);
+  if (ev.kind === 1) onResponse(ev, data);
   else onRequest(ev, data, now);
 }
 
@@ -137,7 +141,7 @@ function onRequest(ev, data, now) {
   let row = stats.get(key);
   if (!row) {
     row = { ...req, count: 0, prev: 0, rate: 0, peak: 0, bytes: 0,
-            first: now, last: now, hist: [], lat: [], status: {}, lastMs: null };
+            first: now, last: now, hist: [], lat: [], status: {}, lastMs: null, txns: [] };
     stats.set(key, row);
   }
   const len = Number(ev.total_len);
@@ -147,18 +151,23 @@ function onRequest(ev, data, now) {
   totals.reqs++;
   totals.bytes += len;
 
-  // Queue this request so the matching response can measure its latency.
+  // Every request is a transaction (in = request, out = response once it pairs).
+  const txn = { ts: now, in: decode(ev, data), out: null, status: 0, ms: null };
+  row.txns.unshift(txn);
+  if (row.txns.length > TXN_MAX) row.txns.pop();
+
+  // Queue this request so the matching response fills in its transaction.
   const f = flowKey(ev);
   let q = pending.get(f);
   if (!q) { q = []; pending.set(f, q); }
-  q.push({ ts: Number(ev.ts), key, at: now });
+  q.push({ ts: Number(ev.ts), key, at: now, txn });
   if (q.length > 64) q.shift(); // cap a flow whose responses we never see
 }
 
-function onResponse(ev, data, now) {
+function onResponse(ev, data) {
   const q = pending.get(flowKey(ev));
   if (!q || q.length === 0) return; // no request seen for this flow
-  const { ts: reqTs, key } = q.shift();
+  const { ts: reqTs, key, txn } = q.shift();
   if (q.length === 0) pending.delete(flowKey(ev));
 
   const row = stats.get(key);
@@ -171,6 +180,9 @@ function onResponse(ev, data, now) {
 
   const code = parseStatus(data.subarray(0, Number(ev.captured)));
   if (code) row.status[code] = (row.status[code] || 0) + 1;
+
+  // Attach the response to the request's transaction (the inspect pane's `out`).
+  if (txn) { txn.out = decode(ev, data); txn.status = code; txn.ms = ms; }
 }
 
 /* ---- ticking ------------------------------------------------------ */
@@ -210,9 +222,10 @@ function sampleRates() {
   }
 }
 
-// Start the feed. The ring buffer is single-consumer and ingestion is
-// always-on (see the module header), so wire it up at load time.
-new RingBuf(control, "events").subscribe(
+// Start the feed. probe.js fans every netns ring buffer (host + each ECS task)
+// into one consumer, and ingestion is always-on (see the module header), so
+// register at load time.
+subscribe(
   onEvent,
   (err) => console.error("[httptop] ringbuf error:", err.message),
 );
