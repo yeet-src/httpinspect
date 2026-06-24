@@ -86,8 +86,12 @@ function statusSpans(status) {
     [i ? "  " : "", bold(fg(statusColor(Number(code)))(code)), fg(muted)(`×${n}`)]);
 }
 
-// in / out as clickable-looking tabs; the active one gets a filled bg.
-const tab = (lbl, active) => active ? bg(selBg)(bold(fg(accent)(` ${lbl} `))) : fg(muted)(` ${lbl} `);
+// in / out as clickable-looking tabs; the active one is loud — a bright filled
+// bg (cyan for in, pink for out) with dark ink for contrast.
+const TAB_INK = rgb(0x14142b);
+const tab = (lbl, active, hue) => active
+  ? bg(hue)(bold(fg(TAB_INK)(` ${lbl} `)))
+  : fg(muted)(` ${lbl} `);
 
 // Endpoint header shown on both screens.
 function endpointHead(r, totals) {
@@ -187,7 +191,7 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size, tx
               txn && txn.status ? fg(muted)("  ·  ") : "",
               txn && txn.status ? bold(fg(statusColor(txn.status))(String(txn.status))) : "",
               txn && txn.ms != null ? fg(muted)(`  ·  ${fmtMs(txn.ms)}`) : "",
-              "    ", tab("in", dir === 0), " ", tab("out", dir === 1),
+              "    ", tab("in", dir === 0, accent), " ", tab("out", dir === 1, rgb(0xff79c6)),
               fg(muted)("  tab · h/b collapse · ↑/↓ scroll · ←/→ back"),
             ]}</Text>
             <Box direction="column" width="1fr" height="1fr" overflow="hidden">
