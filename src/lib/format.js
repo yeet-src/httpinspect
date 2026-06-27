@@ -18,11 +18,21 @@ export const grid = idx(8);          /* table border */
 export const selBg = idx(236);       /* highlighted row in the list */
 export const label = idx(244);       /* detail-screen field labels */
 
-/* Fixed column widths (cells); PATH takes the remaining 1fr. */
-export const W_RANK = 4, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_HOST = 22, W_LAST = 6;
+/* Fixed column widths (cells). PATH is capped so the numeric columns land in
+ * the same screen position on every row; a trailing 1fr spacer absorbs any
+ * leftover width on wide terminals. */
+export const W_RANK = 4, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_HOST = 22, W_LAST = 6, W_ERR = 7, W_PATH = 50;
 
 export const pad = (s, w) => String(s).padStart(w);
 export const padEnd = (s, w) => String(s).padEnd(w);
+
+/* Fit a left-aligned string to exactly `w` columns: elide with `…` past the
+ * width, pad out below it. A Text's `width` is only a max — it won't pad short
+ * content for us — so a constant-width column has to carry its own padding. */
+export const cell = (s, w) => {
+  s = String(s);
+  return s.length > w ? s.slice(0, Math.max(0, w - 1)) + "…" : s.padEnd(w);
+};
 
 /* 1234 -> "1.2k", 12345 -> "12k", 1_200_000 -> "1.2M" */
 export function fmtCount(n) {
@@ -60,6 +70,21 @@ export function fmtMs(ms) {
   if (ms >= 10) return Math.round(ms) + "ms";
   if (ms >= 1) return ms.toFixed(1) + "ms";
   return ms.toFixed(2) + "ms";
+}
+
+/* error fraction (0..1) -> "·" when none, else "0.4%" / "12%" / "73%". */
+export function fmtErrPct(rate) {
+  if (rate <= 0) return "·";
+  const p = rate * 100;
+  if (p >= 10) return Math.round(p) + "%";
+  return p.toFixed(1) + "%";
+}
+
+/* error fraction (0..1) -> heat color: grey none, yellow some, red bad. */
+export function errColor(rate) {
+  if (rate <= 0) return label;
+  if (rate < 0.15) return rgb(0xdcdcaa); // yellow — baseline noise
+  return rgb(0xf48771);                   // red — a real incident
 }
 
 /* HTTP status code -> color by class (2xx green, 3xx blue, 4xx yellow, 5xx red). */

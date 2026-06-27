@@ -15,7 +15,7 @@
 // importing probes/probe.js (the shared object) and probes/httptop.js (ingest).
 import { Box, mount, signal } from "yeet:tui";
 import { ifaceLabel } from "@/probes/probe.js";
-import { rows, totals, tick, endpoint, endpointCount, keyOf } from "@/probes/httptop.js";
+import { rows, totals, tick, endpoint, endpointCount, keyOf, sortMode, topAlert } from "@/probes/httptop.js";
 import StatusBar from "@/components/statusbar.jsx";
 import ListPanel from "@/components/list.jsx";
 import DetailPanel from "@/components/detail.jsx";
@@ -54,18 +54,25 @@ function enterDetail() {
 
 const exitDetail = () => focusKey.set(null);
 
+/* Flip the list between busiest-first and worst-error-rate-first. Reset the
+ * selection because the rows reorder under it on the next tick. */
+function toggleSort() {
+  sortMode.set(sortMode.get() === "count" ? "errors" : "count");
+  sel.set(0);
+}
+
 // ── root ─────────────────────────────────────────────────────────────────────
 // `view(size)` hands us the terminal's reactive size signal; reading it inside
 // the body thunk reflows the active panel on resize. The body switches screens
 // on `focusKey`; the data layer feeds it through the props.
 const Root = (size) => (
   <Box direction="column" width="1fr" height="1fr" padding={[0, 1]}>
-    <StatusBar ifaceLabel={ifaceLabel} />
+    <StatusBar ifaceLabel={ifaceLabel} tick={tick} topAlert={topAlert} />
     {() => focusKey.get()
       ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
     <Footer totals={totals} endpointCount={endpointCount} />
-    <Legend focusKey={focusKey} />
+    <Legend focusKey={focusKey} sortMode={sortMode} />
   </Box>
 );
 
@@ -93,6 +100,7 @@ tty.on("keydown", (e) => {
     default:
       if (e.key === "j") moveSel(1);
       else if (e.key === "k") moveSel(-1);
+      else if (e.key === "e") toggleSort();
       else if (e.key === "q") yeet.exit();
   }
 });
