@@ -4,9 +4,11 @@
 // they change. `endpoint()` looks the row up; `totals` gives the share.
 import { Box, Text, bold, dim, fg } from "yeet:tui";
 import {
-  methodColor, accent, rateOn, grid, label, W_METHOD,
+  methodColor, accent, rateOn, grid, label, W_METHOD, W_COUNT, W_ERR,
   fmtCount, fmtBytes, fmtAgo, fmtMs, percentile, statusColor, sparkline,
+  errColor, fmtErrPct, pad,
 } from "@/lib/format.js";
+import { errRate } from "@/probes/httptop.js";
 
 // Components are called `(opts, ...children)` by the JSX runtime, so read the
 // value pieces from the rest args — not a `children` prop.
@@ -25,6 +27,23 @@ function statusSpans(status) {
   if (codes.length === 0) return dim("— no responses paired yet");
   return codes.flatMap(([code, n], i) =>
     [i ? "  " : "", fg(statusColor(Number(code)))(code), dim(`×${n}`)]);
+}
+
+/* The "by client" abuse breakdown: which callers drive this endpoint's traffic
+ * and its errors. Worst offender first (errors, then volume), top 6. */
+function clientRows(clients) {
+  const list = [...clients.entries()]
+    .map(([id, c]) => ({ id, count: c.count, errs: c.errs, er: c.count ? c.errs / c.count : 0 }))
+    .sort((a, b) => b.errs - a.errs || b.count - a.count)
+    .slice(0, 6);
+  if (!list.length) return [<Text>{dim("— no clients seen yet")}</Text>];
+  return list.map((c) => (
+    <Box direction="row" height="fit">
+      <Text width="1fr" overflow="ellipsis">{c.errs > 0 ? c.id : dim(c.id)}</Text>
+      <Text width={W_COUNT}>{pad(fmtCount(c.count), W_COUNT)}</Text>
+      <Text width={W_ERR}>{fg(errColor(c.er))(pad(fmtErrPct(c.er), W_ERR))}</Text>
+    </Box>
+  ));
 }
 
 export default function DetailPanel({ focusKey, tick, endpoint, totals, size }) {
@@ -53,6 +72,10 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size }) 
           <Field name="Req/s now">{r.rate > 0 ? fg(rateOn)(String(r.rate)) : dim("0")}{dim(`   peak ${r.peak}/s`)}</Field>,
           <Field name="Latency">{lat}</Field>,
           <Field name="Status">{statusSpans(r.status)}</Field>,
+          <Field name="Errors">{r.respTotal ? [
+            bold(fg(errColor(errRate(r)))(fmtErrPct(errRate(r)))),
+            dim(`  ${r.err4} 4xx · ${r.err5} 5xx  of ${r.respTotal} paired`),
+          ] : dim("no responses paired yet")}</Field>,
           <Field name="Bytes">{fmtBytes(r.bytes)}{dim(" on the wire")}</Field>,
           <Field name="First seen">{`${fmtAgo(now - r.first)} ago`}</Field>,
           <Field name="Last seen">{`${fmtAgo(now - r.last)} ago`}</Field>,
@@ -62,6 +85,16 @@ export default function DetailPanel({ focusKey, tick, endpoint, totals, size }) 
           <Text> </Text>,
           <Text>{fg(label)("Latency, recent responses")}</Text>,
           <Text overflow="hidden">{fg(accent)(sparkline(r.lat, sparkW))}</Text>,
+          <Text> </Text>,
+          <Text>{fg(label)("Errors/s, last minute")}</Text>,
+          <Text overflow="hidden">{fg(errColor(errRate(r)))(sparkline(r.ehist, sparkW))}</Text>,
+          <Text> </Text>,
+          <Box direction="row" height="fit">
+            <Text width="1fr">{fg(label)("By client (worst first)")}</Text>
+            <Text width={W_COUNT}>{fg(label)(pad("REQS", W_COUNT))}</Text>
+            <Text width={W_ERR}>{fg(label)(pad("ERR%", W_ERR))}</Text>
+          </Box>,
+          ...clientRows(r.clients),
         ];
       }}
     </Box>

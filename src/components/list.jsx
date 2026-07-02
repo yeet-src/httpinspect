@@ -4,19 +4,21 @@
 import { Box, Text, bold, dim, fg } from "yeet:tui";
 import {
   methodColor, accent, rateOn, grid, selBg,
-  W_RANK, W_METHOD, W_COUNT, W_RATE, W_HOST, W_LAST,
-  pad, padEnd, fmtCount, fmtAgo,
+  W_RANK, W_METHOD, W_COUNT, W_RATE, W_HOST, W_LAST, W_ERR, W_PATH,
+  pad, padEnd, cell, fmtCount, fmtAgo, fmtErrPct, errColor,
 } from "@/lib/format.js";
+import { errRate } from "@/probes/httptop.js";
 
 function HeaderRow() {
   return (
     <Box direction="row" height="fit">
-      <Text width={W_RANK}>{dim("#")}</Text>
-      <Text width={W_METHOD}>{bold("METHOD")}</Text>
-      <Text width={W_HOST}>{bold("HOST")}</Text>
-      <Text width="1fr">{bold("PATH")}</Text>
+      <Text width={W_RANK}>{dim(cell("#", W_RANK))}</Text>
+      <Text width={W_METHOD}>{bold(padEnd("METHOD", W_METHOD))}</Text>
+      <Text width={W_HOST}>{bold(padEnd("HOST", W_HOST))}</Text>
+      <Text width={W_PATH}>{bold(padEnd("PATH", W_PATH))}</Text>
       <Text width={W_COUNT}>{bold(pad("COUNT", W_COUNT))}</Text>
       <Text width={W_RATE}>{bold(pad("REQ/S", W_RATE))}</Text>
+      <Text width={W_ERR}>{bold(pad("ERR%", W_ERR))}</Text>
       <Text width={W_LAST}>{bold(pad("LAST", W_LAST))}</Text>
     </Box>
   );
@@ -24,14 +26,22 @@ function HeaderRow() {
 
 function Row({ row, rank, selected }) {
   const rateStr = row.rate > 0 ? pad(fmtCount(row.rate), W_RATE) : dim(pad("·", W_RATE));
+  const er = errRate(row);
+  const errCell = pad(fmtErrPct(er), W_ERR);
+  // Highlight a real incident: red + bold once the error rate clears the noise band.
+  const errSpan = er <= 0 ? dim(errCell)
+    : er >= 0.15 ? bold(fg(errColor(er))(errCell))
+    : fg(errColor(er))(errCell);
+  const rankCell = cell((selected ? "› " : "  ") + rank, W_RANK);
   return (
     <Box direction="row" height="fit" bg={selected ? selBg : undefined}>
-      <Text width={W_RANK}>{selected ? fg(accent)("› " + pad(rank, 2).slice(1)) : dim(pad(rank, 2) + " ")}</Text>
+      <Text width={W_RANK}>{selected ? fg(accent)(rankCell) : dim(rankCell)}</Text>
       <Text width={W_METHOD}>{fg(methodColor(row.method))(padEnd(row.method, W_METHOD))}</Text>
-      <Text width={W_HOST} overflow="ellipsis">{dim(row.host)}</Text>
-      <Text width="1fr" overflow="ellipsis">{row.path}</Text>
+      <Text width={W_HOST}>{dim(cell(row.host, W_HOST))}</Text>
+      <Text width={W_PATH}>{cell(row.path, W_PATH)}</Text>
       <Text width={W_COUNT}>{bold(fg(accent)(pad(fmtCount(row.count), W_COUNT)))}</Text>
       <Text width={W_RATE}>{row.rate > 0 ? fg(rateOn)(rateStr) : rateStr}</Text>
+      <Text width={W_ERR}>{errSpan}</Text>
       <Text width={W_LAST}>{dim(pad(fmtAgo(Date.now() - row.last), W_LAST))}</Text>
     </Box>
   );
