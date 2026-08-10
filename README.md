@@ -1,3 +1,4 @@
+<!-- yeet:user-friendly-title: Live stream HTTP requests -->
 # `httpinspect`
 
 > **`top` for the HTTP endpoints on your host.** Every plaintext HTTP request crossing the box — decoded off the wire and ranked live in your terminal by traffic, rate, and latency. No proxy, no sidecar, no app changes.
