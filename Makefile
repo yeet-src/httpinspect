@@ -4,6 +4,7 @@
 #   make bpf     — compile bpf/*.bpf.c into bin/* only
 #   make veristat — load the built object with veristat (verifier check on this kernel)
 #   make bundle  — bundle the JS entry with the vendored esbuild
+#   make verify  — headless capture/parse self-test (no TUI), ~5s
 #   make postgen — finalize a freshly generated project (git init)
 #   make clangd  — write a local .clangd pointing at the resolved toolchain
 #   make clean   — remove build artifacts
@@ -39,10 +40,21 @@ all: bpf bundle
 # one — esbuild then inlines node_modules at bundle time.
 ESBUILD_FLAGS := --bundle --format=esm --platform=neutral \
 	--main-fields=module,main --conditions=import,module \
-	--outfile=src/index.jsx --jsx=automatic --jsx-import-source=yeet:tui
+	--jsx=automatic --jsx-import-source=yeet:tui \
+	'--external:yeet:*' '--external:*.bpf.o'
 
 bundle: | toolchain
-	$(ESBUILD) src/main.jsx $(ESBUILD_FLAGS) '--external:yeet:*' '--external:*.bpf.o'
+	$(ESBUILD) src/main.jsx $(ESBUILD_FLAGS) --outfile=src/index.jsx
+
+# Headless self-test of the capture + parse pipeline (src/verify.js). It is a
+# separate entry, not an `import.meta.main` block inside a probe: esbuild
+# inlines every module into one file, so inside the bundle `import.meta.main`
+# is true for all of them and such a guard would hijack `yeet run .`. Bundled
+# into .build/ so `../bin/probe.bpf.o` in probe.js resolves to bin/ just as it
+# does from src/index.jsx.
+verify: bpf | toolchain
+	$(ESBUILD) src/verify.js $(ESBUILD_FLAGS) --outfile=.build/verify.js
+	yeet run .build/verify.js
 
 # Post-generation finalize: initialize a git repository with the vendored git
 # (fetched via `vendored-git`). Idempotent — skipped if this is already a repo.
