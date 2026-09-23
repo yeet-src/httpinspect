@@ -186,10 +186,16 @@ a subscription callback, or `Promise.resolve().then(() => sig.set(…))`.
 
 - `Box(opts, ...kids)` — flow container. `direction="row"|"column"` (**column
   default**). `width/height/left/top/right/bottom`, `border`, `padding`,
-  `overflow="hidden"|"visible"`, `z`, `bg`.
+  `overflow="hidden"|"ellipsis"|"visible"`, `break="word"|"anywhere"|"none"`,
+  `z`, `bg`. **The Box owns layout** — size, wrap, clipping — for the text it
+  holds. `fg` and the boolean faces set on a Box cascade to the text beneath.
 - `Layer(opts, ...kids)` — z-stack; child insets are absolute in the rect.
-- `Text(opts, content)` — `break="word"|"anywhere"|"none"`,
-  `overflow="hidden"|"ellipsis"|"visible"`.
+- `Text(face, ...content)` — an **inline styled run**, like a DOM text node,
+  *not* a layout node. Its props are a face (`fg`, `bg`, `bold`, `dim`, …);
+  `width`/`height`/`overflow` on a Text are **silently ignored**. Children
+  (strings, numbers, nested `<Text>`, thunks) concat into one run. Put it in a
+  sized Box to place it: `<Box width={8} height={1} break="none"><Text>…</Text></Box>`.
+  A bare string child of a Box is shorthand for a default-faced Text.
 - `CellBuffer({rows, cols})` — raster surface: `.blit(x,y,str)`,
   `.tint(x,y,w,h,color)`, `.clear()` for pixel/game drawing.
 - `Effect(fn)` — invisible lifecycle leaf; `fn` runs on mount, returns teardown.
@@ -199,13 +205,18 @@ a subscription callback, or `Promise.resolve().then(() => sig.set(…))`.
 `"fit"`, `"50vw"`, `Size.min/max/clamp/add/sub(...)`. **Frame the root with
 `1fr` or a fixed size or the tree collapses to 0.**
 
-**Color & faces** — combinators wrap a string (innermost wins):
-`fg(color)`, `bg(color)`, `bold`, `dim`, `italic`, `underline`, `reverse`,
-`strike`. Colors: `idx(0..255)`, `rgb(0xRRGGBB)` / `rgb(r,g,b)`,
-`rgba(...,a)`, `color("#ff0080")`, `DEFAULT`.
+**Color & faces** — the idiomatic form is face props on `Text`/`Box`:
+`<Text bold fg={idx(2)}>…</Text>`. The combinators `fg(color)`, `bg(color)`,
+`bold`, `dim`, `italic`, `underline`, `reverse`, `strike` still work (innermost
+wins) but are deprecated — and they now return a **run object, not a string**.
+Never `+`-concatenate or template-interpolate one (`"  " + bold(x)` renders
+`[object Object]`); pass spans as sibling children instead: `["  ", bold(x)]`.
+Colors: `idx(0..255)`, `rgb(0xRRGGBB)` / `rgb(r,g,b)`, `rgba(...,a)`, a hex
+string `"#ff0080"`, `DEFAULT`.
 
 ```jsx
-<Text>{() => bold(fg(idx(2))(`${pct(frac.get())}`))}</Text>
+<Text bold fg={idx(2)}>{() => pct(frac.get())}</Text>
+<Text>{() => bold(fg(idx(2))(`${pct(frac.get())}`))}</Text>   // legacy, still fine
 ```
 
 (There's also a separate `style.red(s)` / `style.bold(s)` global — that's for
@@ -281,7 +292,11 @@ writes atomically. `yeet.exit()` tears the script down.
 - **Proportional gauge** — two `Box`es with computed `1fr` widths that sum to a
   constant, each `bg`-filled (see the worked example).
 - **Color-by-value** — `const heat = f => f < 0.6 ? GREEN : f < 0.85 ? AMBER : RED`.
-- **Table** — fixed `Text` header + `{() => rows.get().slice(0, h).map(r => <Text>{cells(r)}</Text>)}`.
+- **Table** — one `direction="row"` Box per row, one fixed-width Box per
+  column (`<Box width={W} height={1} break="none" overflow="hidden"><Text>{cell}</Text></Box>`);
+  a Text has no width, so the Box is what holds the column open. Right-align
+  by padding the string — a Box doesn't align. Give the widest column `1fr`
+  so the numeric ones stay pinned to the right edge at any terminal width.
 - **Rate** — accumulate in a window, `setInterval(1000)` pushes to a bounded
   history array signal and resets the window.
 
@@ -312,12 +327,25 @@ writes atomically. `yeet.exit()` tears the script down.
     `null`/`[]`), so every render thunk runs once before data arrives. Use
     `x?.field` / `if (!data) return …` or the first frame throws.
 12. **Uncaught errors get dumped over your UI** — there's no `unhandledrejection`
-    hook; the daemon renders the exception to the screen. Catch at the
-    boundaries (see *Crash handling*) so a failing probe degrades to a status
-    line instead of wrecking the display.
+    / `onerror` hook a script can reach (as of yeet 0.22 the runtime has the
+    web-style event plumbing internally, but `globalThis.addEventListener` is
+    not a function in a script isolate); the daemon renders the exception to
+    the screen. Catch at the boundaries (see *Crash handling*) so a failing
+    probe degrades to a status line instead of wrecking the display.
 13. **`yeet.args` is minimist-parsed** — positionals in `yeet.args._`, flags as
     named keys (`yeet run . -- --pid 42 eth0` → `{_: ["eth0"], pid: 42}`). Use
     it to parameterize a dashboard (target pid, interface, refresh rate).
+14. **`width`/`height` on a `Text` do nothing** — a Text is an inline run. Size,
+    `break`, and `overflow` live on the enclosing Box. Symptom: columns and
+    label/value gutters collapse (`GETbob:8080/ping`, `Requests1`).
+15. **A Box stacks its children as separate leaves** — three spans in a
+    one-row Box show only the first. To concat spans on one line, wrap them in
+    a single `<Text>`; only Text joins its children into one run.
+16. **Trailing whitespace is trimmed at wrap points** — `<Text> </Text>` is not
+    a reliable blank line; use `<Box height={1} />` as a spacer.
+17. **A parent re-render does not re-mint its children** — a thunk re-runs only
+    when a signal *it* read changes. A footer that reads a plain mutable object
+    never updates; have it read a `tick` signal too.
 
 ## Worked examples
 
@@ -343,10 +371,10 @@ const lpad = (s, n) => `${s}`.padStart(n);
 export default function Gauge({ frac, label }) {
   return (
     <Box height="1" direction="row">
-      <Text width="8">{fg(idx(244))(label)}</Text>
+      <Box width="8" height="1"><Text fg={idx(244)}>{label}</Text></Box>
       {() => <Box width={`${1 + Math.round(frac.get() * 998)}fr`} bg={heat(frac.get())} />}
       {() => <Box width={`${1 + Math.round((1 - frac.get()) * 998)}fr`} bg={RAIL} />}
-      <Text width="5">{() => bold(lpad(pct(frac.get()), 5))}</Text>
+      <Box width="5" height="1"><Text bold>{() => lpad(pct(frac.get()), 5)}</Text></Box>
     </Box>
   );
 }
@@ -400,7 +428,7 @@ tty.on("keydown", (e) => {
 
 const Root = () => (
   <Box>
-    <Text height="1">{bold(" sysload  —  q to quit")}</Text>
+    <Box height="1"><Text bold>{" sysload  —  q to quit"}</Text></Box>
     <Box height="1fr" overflow="hidden">
       <Gauge frac={cpu} label="cpu" />
     </Box>
@@ -441,13 +469,13 @@ export const conns = from((state) => {
 ```
 
 ```jsx
-// components/conns.jsx — reads the signal in a thunk, one Text per row
+// components/conns.jsx — reads the signal in a thunk, one row Box per conn
 import { Box, Text } from "yeet:tui";
 
 export default function Conns({ conns }) {
   return (
     <Box height="1fr" overflow="hidden">
-      {() => conns.get().map((r) => <Text height="1">{`${r.comm.padEnd(16)} :${r.port}`}</Text>)}
+      {() => conns.get().map((r) => <Box height="1">{`${r.comm.padEnd(16)} :${r.port}`}</Box>)}
     </Box>
   );
 }
@@ -484,7 +512,7 @@ export default function Detail({ pid }) {
           return () => sub.then((s) => s.unsubscribe()); // teardown on unmount / re-run
         }}
       </Effect>
-      {() => lines.get().map((l) => <Text height="1">{l}</Text>)}
+      {() => lines.get().map((l) => <Box height="1">{l}</Box>)}
     </Box>
   );
 }
@@ -569,11 +597,13 @@ export default function Histogram({ latency }) {
         const slots = latency.get();
         const peak = Math.max(...slots, 1);
         return slots.map((n, i) => (
-          <Text height="1">
-            {`${String(lo(i)).padStart(12)}ns `}
-            {fg(idx(4))(BARS[Math.min(7, Math.floor((n / peak) * 7.99))].repeat(Math.ceil((n / peak) * 40)))}
-            {`  ${n}`}
-          </Text>
+          <Box height="1" break="none" overflow="hidden">
+            <Text>
+              {`${String(lo(i)).padStart(12)}ns `}
+              <Text fg={idx(4)}>{BARS[Math.min(7, Math.floor((n / peak) * 7.99))].repeat(Math.ceil((n / peak) * 40))}</Text>
+              {`  ${n}`}
+            </Text>
+          </Box>
         ));
       }}
     </Box>
@@ -646,11 +676,11 @@ export default function Bsod({ error }) {
   const lines = String(error?.stack ?? error?.message ?? error).split("\n");
   return (
     <Box bg={BLUE} width="1fr" height="1fr" padding={2}>
-      <Text height="1">{bold(fg(WHITE)(":(  your dashboard hit an error"))}</Text>
-      <Text height="1">{" "}</Text>
-      {lines.map((l) => <Text height="1">{fg(WHITE)(l)}</Text>)}
-      <Text height="1">{" "}</Text>
-      <Text height="1">{fg(idx(250))("press q to quit")}</Text>
+      <Box height="1"><Text bold fg={WHITE}>{":(  your dashboard hit an error"}</Text></Box>
+      <Box height="1" />
+      {lines.map((l) => <Box height="1"><Text fg={WHITE}>{l}</Text></Box>)}
+      <Box height="1" />
+      <Box height="1"><Text fg={idx(250)}>{"press q to quit"}</Text></Box>
     </Box>
   );
 }

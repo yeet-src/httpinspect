@@ -1,10 +1,13 @@
 // List screen: a bordered, flex-filling endpoint table sorted by request
-// count. Reads `rows` (the sorted endpoint snapshot) and `sel` (the
-// highlighted index); `size` reflows the visible window on resize.
-import { Box, Text, bold, dim, fg } from "yeet:tui";
+// count. Each column is a fixed-width <Cell> (a Box) — a <Text> carries no
+// size of its own, so the Box is what holds the column open. Reads `rows`
+// (the sorted endpoint snapshot) and `sel` (the highlighted index); `size`
+// reflows the visible window on resize.
+import { Box, bold, dim, fg } from "yeet:tui";
+import Cell from "@/components/cell.jsx";
 import {
   methodColor, accent, rateOn, grid, selBg,
-  W_RANK, W_METHOD, W_COUNT, W_RATE, W_HOST, W_LAST, W_ERR, W_PATH,
+  W_RANK, W_METHOD, W_COUNT, W_RATE, W_HOST, W_LAST, W_ERR,
   pad, padEnd, cell, fmtCount, fmtAgo, fmtErrPct, errColor,
 } from "@/lib/format.js";
 import { errRate } from "@/probes/httptop.js";
@@ -12,14 +15,14 @@ import { errRate } from "@/probes/httptop.js";
 function HeaderRow() {
   return (
     <Box direction="row" height="fit">
-      <Text width={W_RANK}>{dim(cell("#", W_RANK))}</Text>
-      <Text width={W_METHOD}>{bold(padEnd("METHOD", W_METHOD))}</Text>
-      <Text width={W_HOST}>{bold(padEnd("HOST", W_HOST))}</Text>
-      <Text width={W_PATH}>{bold(padEnd("PATH", W_PATH))}</Text>
-      <Text width={W_COUNT}>{bold(pad("COUNT", W_COUNT))}</Text>
-      <Text width={W_RATE}>{bold(pad("REQ/S", W_RATE))}</Text>
-      <Text width={W_ERR}>{bold(pad("ERR%", W_ERR))}</Text>
-      <Text width={W_LAST}>{bold(pad("LAST", W_LAST))}</Text>
+      <Cell width={W_RANK}>{dim(cell("#", W_RANK))}</Cell>
+      <Cell width={W_METHOD}>{bold(padEnd("METHOD", W_METHOD))}</Cell>
+      <Cell width={W_HOST}>{bold(padEnd("HOST", W_HOST))}</Cell>
+      <Cell width="1fr">{bold("PATH")}</Cell>
+      <Cell width={W_COUNT}>{bold(pad("COUNT", W_COUNT))}</Cell>
+      <Cell width={W_RATE}>{bold(pad("REQ/S", W_RATE))}</Cell>
+      <Cell width={W_ERR}>{bold(pad("ERR%", W_ERR))}</Cell>
+      <Cell width={W_LAST}>{bold(pad("LAST", W_LAST))}</Cell>
     </Box>
   );
 }
@@ -35,14 +38,14 @@ function Row({ row, rank, selected }) {
   const rankCell = cell((selected ? "› " : "  ") + rank, W_RANK);
   return (
     <Box direction="row" height="fit" bg={selected ? selBg : undefined}>
-      <Text width={W_RANK}>{selected ? fg(accent)(rankCell) : dim(rankCell)}</Text>
-      <Text width={W_METHOD}>{fg(methodColor(row.method))(padEnd(row.method, W_METHOD))}</Text>
-      <Text width={W_HOST}>{dim(cell(row.host, W_HOST))}</Text>
-      <Text width={W_PATH}>{cell(row.path, W_PATH)}</Text>
-      <Text width={W_COUNT}>{bold(fg(accent)(pad(fmtCount(row.count), W_COUNT)))}</Text>
-      <Text width={W_RATE}>{row.rate > 0 ? fg(rateOn)(rateStr) : rateStr}</Text>
-      <Text width={W_ERR}>{errSpan}</Text>
-      <Text width={W_LAST}>{dim(pad(fmtAgo(Date.now() - row.last), W_LAST))}</Text>
+      <Cell width={W_RANK}>{selected ? fg(accent)(rankCell) : dim(rankCell)}</Cell>
+      <Cell width={W_METHOD}>{fg(methodColor(row.method))(padEnd(row.method, W_METHOD))}</Cell>
+      <Cell width={W_HOST}>{dim(cell(row.host, W_HOST))}</Cell>
+      <Cell width="1fr" overflow="ellipsis">{row.path}</Cell>
+      <Cell width={W_COUNT}>{bold(fg(accent)(pad(fmtCount(row.count), W_COUNT)))}</Cell>
+      <Cell width={W_RATE}>{row.rate > 0 ? fg(rateOn)(rateStr) : rateStr}</Cell>
+      <Cell width={W_ERR}>{errSpan}</Cell>
+      <Cell width={W_LAST}>{dim(pad(fmtAgo(Date.now() - row.last), W_LAST))}</Cell>
     </Box>
   );
 }
@@ -56,12 +59,12 @@ export default function ListPanel({ rows, sel, size }) {
     <Box border={{ line: "round", fg: grid }} padding={[0, 1]} direction="column"
       width="1fr" height="1fr" overflow="hidden">
       <HeaderRow />
-      <Text width="1fr" break="none" overflow="hidden">{dim("─".repeat(400))}</Text>
+      <Box height={1} break="none" overflow="hidden">{dim("─".repeat(400))}</Box>
       {() => {
         const data = rows.get();
         const vis = Math.max(3, size.get().rows - 8);
         if (data.length === 0) {
-          return <Text>{dim("waiting for HTTP requests…  (try: curl http://localhost:PORT/path)")}</Text>;
+          return <Cell>{dim("waiting for HTTP requests…  (try: curl http://localhost:PORT/path)")}</Cell>;
         }
         const cur = Math.max(0, Math.min(data.length - 1, sel.get()));
         // Keep the selection inside the visible window [listTop, listTop+vis).
