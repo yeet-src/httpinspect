@@ -219,7 +219,7 @@ Because it's encrypted before it hits the wire. At the TC layer the payload is c
 That's the `Host:` header the client sent. Services addressed by name show their name; those addressed by IP show the IP.
 
 **Can I get a quick check without the full TUI?**
-Yes. `yeet run src/probes/probe.js` attaches the probe, aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline.
+Yes. `make verify` bundles `src/verify.js`, attaches the probe, aggregates for ~4s, and prints the counts before exiting — a headless sanity check of the capture + parse pipeline.
 
 ## License
 
