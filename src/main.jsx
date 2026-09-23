@@ -71,7 +71,7 @@ const Root = (size) => (
     {() => focusKey.get()
       ? <DetailPanel focusKey={focusKey} tick={tick} endpoint={endpoint} totals={totals} size={size} />
       : <ListPanel rows={rows} sel={sel} size={size} />}
-    <Footer totals={totals} endpointCount={endpointCount} />
+    <Footer totals={totals} endpointCount={endpointCount} tick={tick} />
     <Legend focusKey={focusKey} sortMode={sortMode} />
   </Box>
 );

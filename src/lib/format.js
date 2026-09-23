@@ -18,17 +18,17 @@ export const grid = idx(8);          /* table border */
 export const selBg = idx(236);       /* highlighted row in the list */
 export const label = idx(244);       /* detail-screen field labels */
 
-/* Fixed column widths (cells). PATH is capped so the numeric columns land in
- * the same screen position on every row; a trailing 1fr spacer absorbs any
- * leftover width on wide terminals. */
-export const W_RANK = 4, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_HOST = 22, W_LAST = 6, W_ERR = 7, W_PATH = 50;
+/* Fixed column widths (cells). PATH has no fixed width: its <Cell> is `1fr`,
+ * so it absorbs whatever the terminal has left and the numeric columns stay
+ * pinned to the right edge at any width. */
+export const W_RANK = 5, W_METHOD = 8, W_COUNT = 8, W_RATE = 8, W_HOST = 22, W_LAST = 6, W_ERR = 7;
 
 export const pad = (s, w) => String(s).padStart(w);
 export const padEnd = (s, w) => String(s).padEnd(w);
 
 /* Fit a left-aligned string to exactly `w` columns: elide with `…` past the
- * width, pad out below it. A Text's `width` is only a max — it won't pad short
- * content for us — so a constant-width column has to carry its own padding. */
+ * width, pad out below it. The column's <Cell> holds the slot open, but it
+ * doesn't align, so right-aligned numbers still need their own padding. */
 export const cell = (s, w) => {
   s = String(s);
   return s.length > w ? s.slice(0, Math.max(0, w - 1)) + "…" : s.padEnd(w);
